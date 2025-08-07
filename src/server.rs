@@ -1,13 +1,12 @@
 use futures_util::FutureExt;
 // From reth_rpc_layer
-use http::{HeaderValue, header::AUTHORIZATION};
 use std::{
     pin::Pin,
     task::{Context, Poll},
 };
 use tower::{Layer, Service};
 
-use crate::{JsonRpcRequest, JsonRpcResponse, error::JsonRpcError};
+use crate::{error::JsonRpcError, request::JsonRpcRequest, response::JsonRpcResponse};
 
 pub trait IncomingRequest {
     type Response;
@@ -18,7 +17,7 @@ pub trait IncomingRequest {
 pub struct JsonRpcLayer;
 
 impl<S> Layer<S> for JsonRpcLayer {
-    type Service = JsonRpcService<S>;
+    type Service = JsonRpcServer<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
         todo!();
@@ -27,23 +26,17 @@ impl<S> Layer<S> for JsonRpcLayer {
 
 /// Automatically authenticates every client request with the given `secret`.
 #[derive(Debug, Clone)]
-pub struct JsonRpcService<S> {
+pub struct JsonRpcServer<S> {
     inner: S,
 }
 
-// impl<S> JsonRpcService<S> {
-//     const fn new(secret: JwtSecret, inner: S) -> Self {
-//         Self { secret, inner }
-//     }
-// }
-
-impl<S, Req, IntoJsonRpcRequestErr, IntoJsonRpcResponseError> Service<Req> for JsonRpcService<S>
+impl<S, Req, IntoJsonRpcRequestErr, IntoJsonRpcResponseError> Service<Req> for JsonRpcServer<S>
 where
     S: Service<JsonRpcRequest, Response = JsonRpcResponse> + Clone + Send + 'static,
     S::Future: Send + 'static,
     S::Error: Into<JsonRpcError>,
     Req: TryInto<JsonRpcRequest, Error = IntoJsonRpcRequestErr> + IncomingRequest + Send + 'static,
-    <Req as IncomingRequest>::Response: TryInto<JsonRpcResponse, Error = IntoJsonRpcResponseError>,
+    <Req as IncomingRequest>::Response: TryFrom<JsonRpcResponse, Error = IntoJsonRpcResponseError>,
     IntoJsonRpcRequestErr: Into<JsonRpcError>,
     IntoJsonRpcResponseError: Into<JsonRpcError>,
 {
@@ -68,7 +61,7 @@ where
                 .call(request.try_into().map_err(Into::into)?)
                 .await
                 .map_err(Into::into)?;
-            todo!()
+            response.try_into().map_err(Into::into)
         }
         .boxed()
     }
@@ -76,18 +69,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::{JsonRpcRequest, JsonRpcResponse, layer::JsonRpcLayer};
-    use http_body_util::Full;
-    use hyper::{Request, Response, body::Bytes, server::conn::http1};
+    use hyper::server::conn::http1;
     use hyper_util::service::TowerToHyperService;
+
     use std::{convert::Infallible, net::SocketAddr};
     use tokio::net::TcpListener;
 
-    async fn handle(
-        _req: Request<hyper::body::Incoming>,
-    ) -> Result<Response<Full<Bytes>>, Infallible> {
-        Ok(Response::new(Full::new(Bytes::from("hello, world"))))
-    }
+    use crate::{request::JsonRpcRequest, response::JsonRpcResponse, server::JsonRpcLayer};
 
     async fn handle_json_rpc(_req: JsonRpcRequest) -> Result<JsonRpcResponse, Infallible> {
         todo!();

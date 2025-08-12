@@ -1,6 +1,6 @@
 [package]
 name = "tower-json-rpc-derive"
-description = "Proc macros for tower-json-rpc"
+description = "Procedueral macros for tower-json-rpc"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true

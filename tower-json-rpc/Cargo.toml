@@ -1,0 +1,29 @@
+[package]
+name = "tower-json-rpc"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+thiserror.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+http.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+futures.workspace = true
+futures-util.workspace = true
+hyper.workspace = true
+jsonrpsee-types.workspace = true
+
+
+hyper-util.workspace = true
+hyper-rustls.workspace = true
+http-body-util.workspace = true
+
+[dev-dependencies]
+hyper = { workspace = true, features = ["server", "http1"] }
+tower = { workspace = true, features = ["util"] }
+tokio = { workspace = true, features = ["full"] }
+hyper-util = { workspace = true, features = ["full"] }
+hyper-rustls = { workspace = true, features = ["ring"] }
+http-body-util.workspace = true

@@ -1,4 +1,6 @@
 use futures_util::FutureExt;
+use jsonrpsee_types::{Request, Response};
+use serde_json::Value;
 // From reth_rpc_layer
 use std::{
     pin::Pin,
@@ -6,10 +8,18 @@ use std::{
 };
 use tower::{Layer, Service};
 
-use crate::{error::JsonRpcError, request::JsonRpcRequest, response::JsonRpcResponse};
+use crate::error::JsonRpcError;
 
-pub trait IncomingRequest {
-    type Response;
+pub trait ServerRequest {
+    type Response: ServerResponse;
+
+    async fn into_json_rpc_request<'a>(self) -> Result<Request<'a>, JsonRpcError>;
+}
+
+pub trait ServerResponse: Sized {
+    async fn from_json_rpc_response<'a, P: Clone>(
+        response: Response<'a, P>,
+    ) -> Result<Self, JsonRpcError>;
 }
 
 /// A layer that maps http requests to JSON-RPC requests.
@@ -30,17 +40,14 @@ pub struct JsonRpcServer<S> {
     inner: S,
 }
 
-impl<S, Req, IntoJsonRpcRequestErr, IntoJsonRpcResponseError> Service<Req> for JsonRpcServer<S>
+impl<'req, 'res, S, Req> Service<Req> for JsonRpcServer<S>
 where
-    S: Service<JsonRpcRequest, Response = JsonRpcResponse> + Clone + Send + 'static,
+    Req: ServerRequest + Send + 'static,
+    S: Service<Request<'req>, Response = Response<'res, Value>> + Clone + Send + 'static,
     S::Future: Send + 'static,
     S::Error: Into<JsonRpcError>,
-    Req: TryInto<JsonRpcRequest, Error = IntoJsonRpcRequestErr> + IncomingRequest + Send + 'static,
-    <Req as IncomingRequest>::Response: TryFrom<JsonRpcResponse, Error = IntoJsonRpcResponseError>,
-    IntoJsonRpcRequestErr: Into<JsonRpcError>,
-    IntoJsonRpcResponseError: Into<JsonRpcError>,
 {
-    type Response = <Req as IncomingRequest>::Response;
+    type Response = <Req as ServerRequest>::Response;
     type Error = JsonRpcError;
     type Future =
         Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>>;
@@ -52,18 +59,20 @@ where
     fn call(&mut self, request: Req) -> Self::Future {
         // See https://github.com/tower-rs/tower/blob/abb375d08cf0ba34c1fe76f66f1aba3dc4341013/tower-service/src/lib.rs#L276
         // for an explanation of this pattern
-        let mut service = self.clone();
-        service.inner = std::mem::replace(&mut self.inner, service.inner);
-
-        async move {
-            let response = service
-                .inner
-                .call(request.try_into().map_err(Into::into)?)
-                .await
-                .map_err(Into::into)?;
-            response.try_into().map_err(Into::into)
-        }
-        .boxed()
+        // let mut service = self.clone();
+        // service.inner = std::mem::replace(&mut self.inner, service.inner);
+        //
+        // async move {
+        //     let response = service
+        //         .inner
+        //         .call(request.into_json_rpc_request().await?)
+        //         .await
+        //         .map_err(Into::into)?;
+        //     <Req as ServerRequest>::Response::from_json_rpc_response(response).await
+        //     // response.try_into().map_err(Into::into)
+        // }
+        // .boxed()
+        todo!()
     }
 }
 
@@ -77,7 +86,7 @@ mod tests {
 
     use crate::{request::JsonRpcRequest, response::JsonRpcResponse, server::JsonRpcLayer};
 
-    async fn handle_json_rpc(_req: JsonRpcRequest) -> Result<JsonRpcResponse, Infallible> {
+    async fn handle_json_rpc<'a>(_req: JsonRpcRequest<'a>) -> Result<JsonRpcResponse, Infallible> {
         todo!();
     }
 

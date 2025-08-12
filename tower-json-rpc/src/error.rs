@@ -14,6 +14,10 @@ pub enum JsonRpcError {
     IntoRpcRequest(String),
     #[error(transparent)]
     HyperClient(#[from] hyper_util::client::legacy::Error),
+    #[error(transparent)]
+    SerdeJson(#[from] serde_json::Error),
+    #[error(transparent)]
+    Http(#[from] http::Error),
 }
 
 impl From<Infallible> for JsonRpcError {

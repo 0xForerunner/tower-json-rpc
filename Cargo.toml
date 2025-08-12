@@ -1,26 +1,30 @@
-[package]
-name = "tower-json-rpc"
+[workspace]
+resolver = "3"
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
+members = ["tower-json-rpc"]
+
+[workspace.dependencies]
 thiserror = "2"
 tower = "0.5"
 tower-http = "0.6"
 http = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["raw_value"] }
+futures = "0.3"
 futures-util = "0.3"
 hyper = { version = "1", features = ["full"] }
+jsonrpsee-types = "0.26"
+
 
 hyper-util = { version = "0.1", features = ["full"] }
 hyper-rustls = { version = "0.27.0", features = ["ring"] }
 http-body-util = "0.1"
 
-[dev-dependencies]
-hyper = { version = "1", features = ["server", "http1"] }
-tower = { version = "0.5", features = ["util"] }
+# hyper = { version = "1", features = ["server", "http1"] }
+# tower = { version = "0.5", features = ["util"] }
 tokio = { version = "1", features = ["full"] }
-http-body-util = "0.1"
-hyper-util = { version = "0.1", features = ["full"] }
-hyper-rustls = { version = "0.27.0", features = ["ring"] }
+# http-body-util = "0.1"
+# hyper-util = { version = "0.1", features = ["full"] }
+# hyper-rustls = { version = "0.27.0", features = ["ring"] }

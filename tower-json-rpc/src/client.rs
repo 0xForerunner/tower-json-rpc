@@ -3,16 +3,26 @@ use http_body_util::Full;
 use hyper::body::Bytes;
 use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::{Client, connect::HttpConnector};
+use jsonrpsee_types::{Request, Response};
+use serde_json::Value;
 use std::{
     pin::Pin,
     task::{Context, Poll},
 };
 use tower::{Layer, Service};
 
-use crate::{error::JsonRpcError, request::JsonRpcRequest, response::JsonRpcResponse};
+use crate::error::JsonRpcError;
 
-pub trait OutgoingRequest {
-    type Response;
+pub trait ClientRequest: Sized {
+    type Response: ClientResponse;
+
+    async fn from_json_rpc_request<'a>(request: Request<'a>) -> Result<Self, JsonRpcError>;
+}
+
+pub trait ClientResponse {
+    async fn to_json_rpc_response<'a, P: Clone + 'static>(
+        self,
+    ) -> Result<Response<'a, P>, JsonRpcError>;
 }
 
 pub type MyClient = Client<HttpsConnector<HttpConnector>, Full<Bytes>>;
@@ -41,17 +51,14 @@ pub struct JsonRpcClient<S, Req> {
     _req: std::marker::PhantomData<Req>,
 }
 
-impl<S, Req> Service<JsonRpcRequest> for JsonRpcClient<S, Req>
+impl<'req, S, Req> Service<Request<'req>> for JsonRpcClient<S, Req>
 where
-    S: Service<Req, Response = <Req as OutgoingRequest>::Response> + Clone + Send + 'static,
+    Req: ClientRequest + Send + 'static,
+    S: Service<Req, Response = <Req as ClientRequest>::Response> + Clone + Send + 'static,
     S::Future: Send + 'static,
     S::Error: Into<JsonRpcError>,
-    Req: TryFrom<JsonRpcRequest> + OutgoingRequest + Clone + Send + 'static,
-    <Req as TryFrom<JsonRpcRequest>>::Error: Into<JsonRpcError>,
-    <Req as OutgoingRequest>::Response: TryInto<JsonRpcResponse>,
-    <<Req as OutgoingRequest>::Response as TryInto<JsonRpcResponse>>::Error: Into<JsonRpcError>,
 {
-    type Response = JsonRpcResponse;
+    type Response = Response<'req, Value>;
     type Error = JsonRpcError;
     type Future =
         Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>>;
@@ -60,21 +67,23 @@ where
         self.inner.poll_ready(cx).map_err(Into::into)
     }
 
-    fn call(&mut self, request: JsonRpcRequest) -> Self::Future {
+    fn call(&mut self, request: Request<'req>) -> Self::Future {
         // See https://github.com/tower-rs/tower/blob/abb375d08cf0ba34c1fe76f66f1aba3dc4341013/tower-service/src/lib.rs#L276
         // for an explanation of this pattern
-        let mut service = self.clone();
-        service.inner = std::mem::replace(&mut self.inner, service.inner);
-
-        async move {
-            let response = service
-                .inner
-                .call(request.try_into().map_err(Into::<JsonRpcError>::into)?)
-                .await
-                .map_err(Into::<JsonRpcError>::into)?;
-            response.try_into().map_err(Into::into)
-        }
-        .boxed()
+        // let mut service = self.clone();
+        // service.inner = std::mem::replace(&mut self.inner, service.inner);
+        // let inner_request = request.into_
+        //
+        // async move {
+        //     let response = service
+        //         .inner
+        //         .call(request.try_into().map_err(Into::<JsonRpcError>::into)?)
+        //         .await
+        //         .map_err(Into::<JsonRpcError>::into)?;
+        //     response.try_into().map_err(Into::into)
+        // }
+        // .boxed()
+        todo!()
     }
 }
 #[cfg(test)]

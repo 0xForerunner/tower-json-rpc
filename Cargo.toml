@@ -1,9 +1,19 @@
 [workspace]
 resolver = "3"
+
+members = ["tower-json-rpc", "tower-json-rpc-derive"]
+
+[workspace.package]
+authors = ["Eric Woolsey <eric@woolsey.dev>"]
 version = "0.1.0"
 edition = "2024"
-
-members = ["tower-json-rpc"]
+rust-version = "1.89.0"
+license = "MIT"
+repository = "https://github.com/0xforerunner/tower-json-rpc"
+documentation = "https://docs.rs/tower-json-rpc"
+homepage = "https://blog.woolsey.dev"
+keywords = ["jsonrpc", "json", "http", "websocket"]
+readme = "README.md"
 
 [workspace.dependencies]
 thiserror = "2"
@@ -17,10 +27,18 @@ futures-util = "0.3"
 hyper = { version = "1", features = ["full"] }
 jsonrpsee-types = "0.26"
 
+heck = "0.5"
+proc-macro2 = "1"
+proc-macro-crate = "3"
+quote = "1"
+syn = { version = "2", default-features = false }
+
 
 hyper-util = { version = "0.1", features = ["full"] }
 hyper-rustls = { version = "0.27.0", features = ["ring"] }
 http-body-util = "0.1"
+futures-channel = "0.3"
+trybuild = "1"
 
 # hyper = { version = "1", features = ["server", "http1"] }
 # tower = { version = "0.5", features = ["util"] }

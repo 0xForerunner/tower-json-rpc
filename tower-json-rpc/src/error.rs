@@ -18,6 +18,8 @@ pub enum JsonRpcError {
     SerdeJson(#[from] serde_json::Error),
     #[error(transparent)]
     Http(#[from] http::Error),
+    #[error(transparent)]
+    Hyper(#[from] hyper::Error),
 }
 
 impl From<Infallible> for JsonRpcError {

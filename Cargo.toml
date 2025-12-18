@@ -17,7 +17,7 @@ readme = "README.md"
 
 [workspace.dependencies]
 thiserror = "2"
-tower = "0.5"
+tower = { version = "0.5", features = ["util"] }
 tower-http = "0.6"
 http = "1"
 serde = { version = "1.0", features = ["derive"] }

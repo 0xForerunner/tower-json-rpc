@@ -312,15 +312,9 @@ impl RpcDescription {
 			));
 		}
 
-		let jsonrpsee_client_path = crate::helpers::find_jsonrpsee_client_crate().ok();
-		let jsonrpsee_server_path = crate::helpers::find_jsonrpsee_server_crate().ok();
-
-		if needs_client && jsonrpsee_client_path.is_none() {
-			return Err(syn::Error::new_spanned(&item.ident, "Unable to locate 'jsonrpsee' client dependency"));
-		}
-		if needs_server && jsonrpsee_server_path.is_none() {
-			return Err(syn::Error::new_spanned(&item.ident, "Unable to locate 'jsonrpsee' server dependency"));
-		}
+		// We don't need jsonrpsee paths anymore since we're using jsonrpsee_types directly
+		let jsonrpsee_client_path = None;
+		let jsonrpsee_server_path = None;
 
 		item.attrs.clear(); // Remove RPC attributes.
 
@@ -389,7 +383,8 @@ impl RpcDescription {
 
 	pub fn render(self) -> Result<TokenStream2, syn::Error> {
 		let server_impl = if self.needs_server { self.render_server()? } else { TokenStream2::new() };
-		let client_impl = if self.needs_client { self.render_client()? } else { TokenStream2::new() };
+		// Client generation is disabled for now as we're focusing on the server side
+		let client_impl = TokenStream2::new();
 
 		Ok(quote! {
 			#server_impl

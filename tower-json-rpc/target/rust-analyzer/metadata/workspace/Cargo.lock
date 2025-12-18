@@ -1259,6 +1259,7 @@ dependencies = [
  "heck",
  "hyper",
  "hyper-util",
+ "jsonrpsee-types",
  "proc-macro-crate",
  "proc-macro2",
  "quote",

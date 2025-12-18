@@ -40,4 +40,5 @@ serde_json = { workspace = true }
 serde = { workspace = true }
 trybuild = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros"] }
-tower = { workspace = true }
+tower = { workspace = true, features = ["util"] }
+jsonrpsee-types = { workspace = true }

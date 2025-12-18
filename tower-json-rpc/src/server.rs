@@ -1,8 +1,7 @@
-use futures_util::FutureExt;
 use jsonrpsee_types::{Request, Response};
 use serde_json::Value;
-// From reth_rpc_layer
 use std::{
+    future::Future,
     pin::Pin,
     task::{Context, Poll},
 };
@@ -10,16 +9,18 @@ use tower::{Layer, Service};
 
 use crate::error::JsonRpcError;
 
-pub trait ServerRequest {
+pub trait ServerRequest: Send + 'static {
     type Response: ServerResponse;
 
-    async fn into_json_rpc_request<'a>(self) -> Result<Request<'a>, JsonRpcError>;
+    fn into_json_rpc_request(
+        self,
+    ) -> Pin<Box<dyn Future<Output = Result<Request<'static>, JsonRpcError>> + Send + 'static>>;
 }
 
-pub trait ServerResponse: Sized {
-    async fn from_json_rpc_response<'a, P: Clone>(
-        response: Response<'a, P>,
-    ) -> Result<Self, JsonRpcError>;
+pub trait ServerResponse: Sized + Send + 'static {
+    fn from_json_rpc_response(
+        response: Response<'static, Value>,
+    ) -> Pin<Box<dyn Future<Output = Result<Self, JsonRpcError>> + Send + 'static>>;
 }
 
 /// A layer that maps http requests to JSON-RPC requests.
@@ -30,49 +31,53 @@ impl<S> Layer<S> for JsonRpcLayer {
     type Service = JsonRpcServer<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        todo!();
+        JsonRpcServer { inner }
     }
 }
 
-/// Automatically authenticates every client request with the given `secret`.
+/// JSON-RPC server that wraps an inner service
 #[derive(Debug, Clone)]
 pub struct JsonRpcServer<S> {
     inner: S,
 }
 
-impl<'req, 'res, S, Req> Service<Req> for JsonRpcServer<S>
+// Helper type to avoid lifetime issues
+type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
+
+impl<S, Req> Service<Req> for JsonRpcServer<S>
 where
-    Req: ServerRequest + Send + 'static,
-    S: Service<Request<'req>, Response = Response<'res, Value>> + Clone + Send + 'static,
+    Req: ServerRequest,
+    S: Service<Request<'static>, Response = Response<'static, Value>> + Clone + Send + 'static,
     S::Future: Send + 'static,
-    S::Error: Into<JsonRpcError>,
+    S::Error: Into<JsonRpcError> + Send + 'static,
 {
-    type Response = <Req as ServerRequest>::Response;
+    type Response = Req::Response;
     type Error = JsonRpcError;
-    type Future =
-        Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>>;
+    type Future = BoxFuture<Result<Self::Response, Self::Error>>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.inner.poll_ready(cx).map_err(Into::into)
     }
 
     fn call(&mut self, request: Req) -> Self::Future {
-        // See https://github.com/tower-rs/tower/blob/abb375d08cf0ba34c1fe76f66f1aba3dc4341013/tower-service/src/lib.rs#L276
-        // for an explanation of this pattern
-        // let mut service = self.clone();
-        // service.inner = std::mem::replace(&mut self.inner, service.inner);
-        //
-        // async move {
-        //     let response = service
-        //         .inner
-        //         .call(request.into_json_rpc_request().await?)
-        //         .await
-        //         .map_err(Into::into)?;
-        //     <Req as ServerRequest>::Response::from_json_rpc_response(response).await
-        //     // response.try_into().map_err(Into::into)
-        // }
-        // .boxed()
-        todo!()
+        use futures_util::future::FutureExt;
+
+        let mut service = self.inner.clone();
+
+        let fut = request.into_json_rpc_request();
+
+        Box::pin(fut.then(move |result| match result {
+            Ok(json_rpc_request) => {
+                let service_fut = service.call(json_rpc_request);
+                Box::pin(
+                    service_fut.then(move |service_result| match service_result {
+                        Ok(response) => Req::Response::from_json_rpc_response(response),
+                        Err(e) => Box::pin(async move { Err(e.into()) }),
+                    }),
+                ) as BoxFuture<Result<Req::Response, JsonRpcError>>
+            }
+            Err(e) => Box::pin(async move { Err(e) }),
+        }))
     }
 }
 
@@ -80,13 +85,17 @@ where
 mod tests {
     use hyper::server::conn::http1;
     use hyper_util::service::TowerToHyperService;
+    use jsonrpsee_types::{Request, Response};
+    use serde_json::Value;
 
     use std::{convert::Infallible, net::SocketAddr};
     use tokio::net::TcpListener;
 
-    use crate::{request::JsonRpcRequest, response::JsonRpcResponse, server::JsonRpcLayer};
+    use crate::server::JsonRpcLayer;
 
-    async fn handle_json_rpc<'a>(_req: JsonRpcRequest<'a>) -> Result<JsonRpcResponse, Infallible> {
+    async fn handle_json_rpc<'a, T: Clone + Sized + 'a>(
+        _req: Request<'a>,
+    ) -> Result<Response<'a, T>, Infallible> {
         todo!();
     }
 
@@ -95,7 +104,7 @@ mod tests {
         let addr: SocketAddr = ([127, 0, 0, 1], 3000).into();
         let app = tower::ServiceBuilder::new()
             .layer(JsonRpcLayer)
-            .service_fn(handle_json_rpc);
+            .service_fn(handle_json_rpc::<Value>);
 
         let hyper_svc = TowerToHyperService::new(app);
 

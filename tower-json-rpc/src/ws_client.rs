@@ -17,10 +17,7 @@ use jsonrpsee_types::{Request, Response, ResponsePayload};
 use serde_json::Value;
 use tower::Service;
 
-use crate::{
-    client::{Subscription, SubscriptionId, SubscriptionTransport},
-    error::JsonRpcError,
-};
+use crate::error::JsonRpcError;
 
 /// A thin wrapper around jsonrpsee's WebSocket client.
 #[derive(Clone)]
@@ -85,51 +82,6 @@ impl Service<Request<'static>> for WsClient {
                 Ok(value) => Ok(Response::new(ResponsePayload::success(value), id)),
                 Err(e) => Err(JsonRpcError::RequestProcessing(e.to_string())),
             }
-        })
-    }
-}
-
-impl SubscriptionTransport for WsClient {
-    fn subscribe<T: serde::de::DeserializeOwned + Send + 'static>(
-        &self,
-        subscribe_method: &str,
-        params: Option<Box<serde_json::value::RawValue>>,
-        unsubscribe_method: String,
-    ) -> Pin<Box<dyn Future<Output = Result<Subscription<T>, JsonRpcError>> + Send + 'static>> {
-        use jsonrpsee::core::client::SubscriptionClientT;
-
-        let client = self.inner.clone();
-        let subscribe_method = subscribe_method.to_string();
-
-        // Convert RawValue params to Vec<Value>
-        let params_vec: Vec<Value> = if let Some(raw) = params {
-            serde_json::from_str(raw.get()).unwrap_or_default()
-        } else {
-            vec![]
-        };
-
-        Box::pin(async move {
-            let subscription = client
-                .subscribe::<T, _>(&subscribe_method, params_vec, &unsubscribe_method)
-                .await
-                .map_err(|e: ClientError| JsonRpcError::RequestProcessing(e.to_string()))?;
-
-            // Create a channel to forward subscription items
-            let (tx, rx) = futures::channel::mpsc::unbounded();
-
-            // Spawn a task to forward items from the jsonrpsee subscription
-            tokio::spawn(async move {
-                let mut subscription = subscription;
-                while let Some(result) = subscription.next().await {
-                    let item: Result<T, JsonRpcError> =
-                        result.map_err(|e| JsonRpcError::RequestProcessing(e.to_string()));
-                    if tx.unbounded_send(item).is_err() {
-                        break;
-                    }
-                }
-            });
-
-            Ok(Subscription::new(SubscriptionId("0".to_string()), rx))
         })
     }
 }

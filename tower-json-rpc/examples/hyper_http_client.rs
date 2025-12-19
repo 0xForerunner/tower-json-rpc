@@ -6,6 +6,7 @@ use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 use tower_json_rpc::client::RpcCall;
 use tower_json_rpc::error::JsonRpcError;
+use tower_json_rpc::types::Request;
 use tower_json_rpc_derive::rpc;
 
 #[rpc(client, namespace = "say")]
@@ -34,6 +35,13 @@ async fn main() -> Result<(), JsonRpcError> {
     match response {
         SayResponse::Hello(message) => println!("Result from rpc_call: {}", message),
     }
+
+    let req = Request::owned(
+        "say_hello".to_string(),
+        Some(serde_json::value::to_raw_value(&vec!["test"]).unwrap()),
+        jsonrpsee_types::Id::Number(1),
+    );
+    client.rpc_call(req).await?;
 
     Ok(())
 }

@@ -350,21 +350,27 @@ impl RpcDescription {
 			let param_idents2 = param_idents.clone();
 			quote! {
 				#request_enum_name::#variant_name { #(#param_idents),* } => {
-					match handler.#method_ident(#(#param_idents2),*)#await_token {
-						Ok(result) => {
-							let value = serde_json::to_value(result).unwrap();
-							jsonrpsee_types::Response::new(
-								jsonrpsee_types::ResponsePayload::success(value),
-								request_id.clone(),
-							)
+					let handler = handler.clone();
+					let request_id = request_id.clone();
+					Box::pin(async move {
+						match handler.#method_ident(#(#param_idents2),*)#await_token {
+							Ok(result) => {
+								let value = serde_json::to_value(result).unwrap();
+								jsonrpsee_types::Response::new(
+									jsonrpsee_types::ResponsePayload::success(value),
+									request_id,
+								)
+							}
+							Err(err) => {
+								jsonrpsee_types::Response::new(
+									jsonrpsee_types::ResponsePayload::error(err),
+									request_id,
+								)
+							}
 						}
-						Err(err) => {
-							jsonrpsee_types::Response::new(
-								jsonrpsee_types::ResponsePayload::error(err),
-								request_id.clone(),
-							)
-						}
-					}
+					}) as ::tower_json_rpc::server::BoxFuture<
+						jsonrpsee_types::Response<'static, serde_json::Value>,
+					>
 				}
 			}
 		});
@@ -373,16 +379,21 @@ impl RpcDescription {
 			let variant_name = to_variant_name(&sub.name);
 			quote! {
 				#request_enum_name::#variant_name { .. } => {
-					jsonrpsee_types::Response::new(
-						jsonrpsee_types::ResponsePayload::error(
-							jsonrpsee_types::ErrorObjectOwned::owned(
-								jsonrpsee_types::ErrorCode::InvalidRequest.code(),
-								jsonrpsee_types::ErrorCode::InvalidRequest.message(),
-								Some("Subscriptions not yet implemented"),
-							)
-						),
-						request_id.clone(),
-					)
+					let request_id = request_id.clone();
+					Box::pin(async move {
+						jsonrpsee_types::Response::new(
+							jsonrpsee_types::ResponsePayload::error(
+								jsonrpsee_types::ErrorObjectOwned::owned(
+									jsonrpsee_types::ErrorCode::InvalidRequest.code(),
+									jsonrpsee_types::ErrorCode::InvalidRequest.message(),
+									Some("Subscriptions not yet implemented"),
+								)
+							),
+							request_id,
+						)
+					}) as ::tower_json_rpc::server::BoxFuture<
+						jsonrpsee_types::Response<'static, serde_json::Value>,
+					>
 				}
 			}
 		});
@@ -447,6 +458,7 @@ impl RpcDescription {
 
 					Box::pin(fut.then(move |result| match result {
 						Ok(json_request) => {
+							let json_request: jsonrpsee_types::Request<'static> = json_request;
 							let request_id = json_request.id.clone();
 
 							if !matches!(json_request.method.as_ref(), #(#all_method_match)|*) {
@@ -461,23 +473,29 @@ impl RpcDescription {
 								>;
 							}
 
-							let parsed_request = match #request_enum_name::try_from(json_request) {
-								Ok(req) => req,
+							let response_fut: ::tower_json_rpc::server::BoxFuture<
+								jsonrpsee_types::Response<'static, serde_json::Value>,
+							> = match #request_enum_name::try_from(json_request) {
+								Ok(parsed_request) => match parsed_request {
+									#(#method_match_arms)*
+									#(#sub_match_arms)*
+								},
 								Err(err) => {
-									let response = jsonrpsee_types::Response::new(
-										jsonrpsee_types::ResponsePayload::error(err),
-										request_id,
-									);
-									return <Req::Response as ::tower_json_rpc::server::ServerResponse>::from_json_rpc_response(response);
+									let request_id = request_id.clone();
+									Box::pin(async move {
+										jsonrpsee_types::Response::new(
+											jsonrpsee_types::ResponsePayload::error(err),
+											request_id,
+										)
+									})
 								}
 							};
 
-							let response = match parsed_request {
-								#(#method_match_arms)*
-								#(#sub_match_arms)*
-							};
-
-							<Req::Response as ::tower_json_rpc::server::ServerResponse>::from_json_rpc_response(response)
+							Box::pin(response_fut.then(move |response| {
+								<Req::Response as ::tower_json_rpc::server::ServerResponse>::from_json_rpc_response(response)
+							})) as ::tower_json_rpc::server::BoxFuture<
+								Result<Req::Response, ::tower_json_rpc::error::JsonRpcError>,
+							>
 						}
 						Err(err) => Box::pin(async move { Err(err) }),
 					}))

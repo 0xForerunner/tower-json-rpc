@@ -1,21 +1,23 @@
+#![allow(async_fn_in_trait)]
+
 use axum::{Router, http::StatusCode, routing::post_service};
 use jsonrpsee_types::{ErrorCode, ErrorObjectOwned, Request, Response, ResponsePayload};
 use tower::{ServiceBuilder, service_fn};
 use tower_http::trace::TraceLayer;
-use tower_json_rpc::{error::JsonRpcError, server::JsonRpcLayer};
+use tower_json_rpc::error::JsonRpcError;
 use tower_json_rpc_derive::rpc;
 
 #[rpc(server, namespace = "say")]
 pub trait Say {
     #[method(name = "hello")]
-    fn say_hello(&self, name: String) -> Result<String, ErrorObjectOwned>;
+    async fn say_hello(&self, name: String) -> Result<String, ErrorObjectOwned>;
 }
 
 #[derive(Clone, Debug)]
 struct SayImpl;
 
 impl Say for SayImpl {
-    fn say_hello(&self, name: String) -> Result<String, ErrorObjectOwned> {
+    async fn say_hello(&self, name: String) -> Result<String, ErrorObjectOwned> {
         Ok(format!("Hello, {name}!"))
     }
 }

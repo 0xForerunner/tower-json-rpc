@@ -301,6 +301,7 @@ impl RpcDescription {
 		}
 
 		strip_rpc_attrs(&mut item);
+		rewrite_async_methods(&mut item);
 
 		Ok(Self {
 			needs_server,
@@ -370,5 +371,23 @@ fn strip_rpc_attrs(item: &mut syn::ItemTrait) {
 				}
 			}
 		}
+	}
+}
+
+fn rewrite_async_methods(item: &mut syn::ItemTrait) {
+	for entry in &mut item.items {
+		let syn::TraitItem::Fn(method) = entry else { continue };
+
+		if method.sig.asyncness.is_none() {
+			continue;
+		}
+
+		method.sig.asyncness = None;
+		let output = match &method.sig.output {
+			syn::ReturnType::Default => syn::parse_quote!(()),
+			syn::ReturnType::Type(_, ty) => *ty.clone(),
+		};
+		method.sig.output =
+			syn::parse_quote!(-> impl ::core::future::Future<Output = #output> + Send);
 	}
 }

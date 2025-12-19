@@ -422,48 +422,65 @@ impl RpcDescription {
 				handler: std::sync::Arc<H>,
 			}
 			
-			impl<S, H> tower::Service<jsonrpsee_types::Request<'static>> for #service_name<S, H>
+			impl<S, H, Req> tower::Service<Req> for #service_name<S, H>
 			where
+				Req: ::tower_json_rpc::server::ServerRequest,
 				S: tower::Service<jsonrpsee_types::Request<'static>, Response = jsonrpsee_types::Response<'static, serde_json::Value>> + Clone + Send + 'static,
-				S::Future: 'static,
+				S::Future: Send + 'static,
+				S::Error: Into<::tower_json_rpc::error::JsonRpcError> + Send + 'static,
 				H: #trait_name + Send + Sync + 'static
 			{
-				type Response = jsonrpsee_types::Response<'static, serde_json::Value>;
-				type Error = S::Error;
-				type Future = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>>>>;
+				type Response = <Req as ::tower_json_rpc::server::ServerRequest>::Response;
+				type Error = ::tower_json_rpc::error::JsonRpcError;
+				type Future = ::tower_json_rpc::server::BoxFuture<Result<Self::Response, Self::Error>>;
 				
 				fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
-					self.inner.poll_ready(cx)
+					self.inner.poll_ready(cx).map_err(Into::into)
 				}
 				
-				fn call(&mut self, request: jsonrpsee_types::Request<'static>) -> Self::Future {
+				fn call(&mut self, request: Req) -> Self::Future {
+					use ::tower_json_rpc::__private::futures_util::future::FutureExt;
+
 					let handler = self.handler.clone();
-					let request_id = request.id.clone();
-					let method = request.method.clone();
 					let mut inner = self.inner.clone();
+					let fut = request.into_json_rpc_request();
 
-					Box::pin(async move {
-						if !matches!(method.as_ref(), #(#all_method_match)|*) {
-							return inner.call(request).await;
-						}
+					Box::pin(fut.then(move |result| match result {
+						Ok(json_request) => {
+							let request_id = json_request.id.clone();
 
-						let parsed_request = match #request_enum_name::try_from(request) {
-							Ok(req) => req,
-							Err(err) => {
-								return Ok(jsonrpsee_types::Response::new(
-									jsonrpsee_types::ResponsePayload::error(err),
-									request_id,
-								));
+							if !matches!(json_request.method.as_ref(), #(#all_method_match)|*) {
+								let service_fut = inner.call(json_request);
+								return Box::pin(
+									service_fut.then(move |service_result| match service_result {
+										Ok(response) => <Req::Response as ::tower_json_rpc::server::ServerResponse>::from_json_rpc_response(response),
+										Err(err) => Box::pin(async move { Err(err.into()) }),
+									}),
+								) as ::tower_json_rpc::server::BoxFuture<
+									Result<Req::Response, ::tower_json_rpc::error::JsonRpcError>,
+								>;
 							}
-						};
 
-						let response = match parsed_request {
-							#(#method_match_arms)*
-							#(#sub_match_arms)*
-						};
+							let parsed_request = match #request_enum_name::try_from(json_request) {
+								Ok(req) => req,
+								Err(err) => {
+									let response = jsonrpsee_types::Response::new(
+										jsonrpsee_types::ResponsePayload::error(err),
+										request_id,
+									);
+									return <Req::Response as ::tower_json_rpc::server::ServerResponse>::from_json_rpc_response(response);
+								}
+							};
 
-						Ok(response)
-					})
+							let response = match parsed_request {
+								#(#method_match_arms)*
+								#(#sub_match_arms)*
+							};
+
+							<Req::Response as ::tower_json_rpc::server::ServerResponse>::from_json_rpc_response(response)
+						}
+						Err(err) => Box::pin(async move { Err(err) }),
+					}))
 				}
 			}
 			

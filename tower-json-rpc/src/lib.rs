@@ -7,3 +7,8 @@ pub mod server;
 pub mod types {
     pub use jsonrpsee_types::*;
 }
+
+#[doc(hidden)]
+pub mod __private {
+    pub use futures_util;
+}

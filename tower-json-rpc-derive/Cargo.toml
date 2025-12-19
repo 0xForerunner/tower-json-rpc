@@ -41,3 +41,4 @@ trybuild = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros"] }
 tower = { workspace = true, features = ["util"] }
 jsonrpsee-types = { workspace = true }
+tower-json-rpc = { path = "../tower-json-rpc" }

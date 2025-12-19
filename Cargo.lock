@@ -1346,6 +1346,7 @@ dependencies = [
  "syn",
  "tokio",
  "tower",
+ "tower-json-rpc",
  "trybuild",
 ]
 

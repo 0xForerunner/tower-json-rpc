@@ -42,7 +42,7 @@ pub struct JsonRpcServer<S> {
 }
 
 // Helper type to avoid lifetime issues
-type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
+pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 
 impl<S, Req> Service<Req> for JsonRpcServer<S>
 where

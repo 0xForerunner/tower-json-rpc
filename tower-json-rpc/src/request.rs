@@ -3,7 +3,7 @@ use std::{future::Future, pin::Pin};
 use http::header;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Body, Bytes};
-use jsonrpsee_types::Request;
+use jsonrpsee_types::{Request, Response};
 use serde_json::Value;
 
 use crate::{
@@ -38,6 +38,22 @@ where
     }
 }
 
+impl ServerRequest for Request<'static> {
+    type Response = Response<'static, Value>;
+
+    fn into_json_rpc_request(
+        self,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<jsonrpsee_types::Request<'static>, JsonRpcError>>
+                + Send
+                + 'static,
+        >,
+    > {
+        Box::pin(async move { Ok(self) })
+    }
+}
+
 impl ServerResponse for http::Response<Full<Bytes>> {
     fn from_json_rpc_response(
         response: jsonrpsee_types::Response<'static, Value>,
@@ -52,5 +68,13 @@ impl ServerResponse for http::Response<Full<Bytes>> {
                 .body(body)
                 .map_err(Into::<JsonRpcError>::into)
         })
+    }
+}
+
+impl ServerResponse for Response<'static, Value> {
+    fn from_json_rpc_response(
+        response: jsonrpsee_types::Response<'static, Value>,
+    ) -> Pin<Box<dyn Future<Output = Result<Self, JsonRpcError>> + Send + 'static>> {
+        Box::pin(async move { Ok(response) })
     }
 }

@@ -88,15 +88,16 @@ impl RpcMethod {
 
 			let aliases = parse_aliases(aliases)?;
 			let blocking = optional(blocking, Argument::flag)?.is_some();
+			// Use explicit name if provided, otherwise convert snake_case to camelCase
 			let name = optional(name, Argument::string)?
-				.unwrap_or_else(|| method.sig.ident.to_string());
+				.unwrap_or_else(|| snake_to_camel(&method.sig.ident.to_string()));
 			let param_kind = parse_param_kind(param_kind)?;
 			let _with_extensions = optional(with_extensions, Argument::flag)?.is_some();
 
 			(aliases, blocking, name, param_kind)
 		} else {
-			// No attribute - use defaults
-			(Vec::new(), false, method.sig.ident.to_string(), ParamKind::Array)
+			// No attribute - use defaults, converting snake_case to camelCase
+			(Vec::new(), false, snake_to_camel(&method.sig.ident.to_string()), ParamKind::Array)
 		};
 
 		if blocking && method.sig.asyncness.is_some() {
@@ -141,9 +142,14 @@ impl RpcMethod {
 #[derive(Debug, Clone)]
 pub struct RpcSubscription {
 	pub name: String,
+	pub unsubscribe: String,
+	#[allow(dead_code)]
+	pub notif_name: String,
+	pub item: syn::Type,
 	pub params: Vec<RpcFnArg>,
 	pub param_kind: ParamKind,
 	pub aliases: Vec<String>,
+	pub signature: syn::TraitItemFn,
 }
 
 impl RpcSubscription {
@@ -162,13 +168,13 @@ impl RpcSubscription {
 		let aliases = parse_aliases(aliases)?;
 		let map = name?.value::<NameMapping>()?;
 		let name = map.name;
-		let _notif_name_override = map.mapped;
-		let _item: syn::Type = item?.value()?;
+		let notif_name = map.mapped.unwrap_or_else(|| name.clone());
+		let item: syn::Type = item?.value()?;
 		let param_kind = parse_param_kind(param_kind)?;
 		let _unsubscribe_aliases = parse_aliases(unsubscribe_aliases)?;
 		let _with_extensions = optional(with_extensions, Argument::flag)?.is_some();
 
-		let _unsubscribe = match parse_subscribe(unsubscribe)? {
+		let unsubscribe = match parse_subscribe(unsubscribe)? {
 			Some(unsub) => unsub,
 			None => build_unsubscribe_method(&name).unwrap_or_else(||
 				panic!("Could not generate the unsubscribe method with name '{name}'. You need to provide the name manually using the `unsubscribe` attribute in your RPC API definition"),
@@ -195,9 +201,13 @@ impl RpcSubscription {
 
 		Ok(Self {
 			name,
+			unsubscribe,
+			notif_name,
+			item,
 			params,
 			param_kind,
 			aliases,
+			signature: sub,
 		})
 	}
 }
@@ -359,6 +369,26 @@ fn find_attr<'a>(attrs: &'a [Attribute], ident: &str) -> Option<&'a Attribute> {
 
 fn build_unsubscribe_method(method: &str) -> Option<String> {
 	method.strip_prefix("subscribe").map(|s| format!("unsubscribe{s}"))
+}
+
+/// Converts snake_case to camelCase.
+/// Examples: "block_number" -> "blockNumber", "get_block_by_hash" -> "getBlockByHash"
+fn snake_to_camel(s: &str) -> String {
+	let mut result = String::new();
+	let mut capitalize_next = false;
+
+	for ch in s.chars() {
+		if ch == '_' {
+			capitalize_next = true;
+		} else if capitalize_next {
+			result.push(ch.to_ascii_uppercase());
+			capitalize_next = false;
+		} else {
+			result.push(ch);
+		}
+	}
+
+	result
 }
 
 fn strip_rpc_attrs(item: &mut syn::ItemTrait) {

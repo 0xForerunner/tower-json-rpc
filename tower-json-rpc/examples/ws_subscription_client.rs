@@ -17,7 +17,6 @@
 //! ```
 
 #![allow(async_fn_in_trait)]
-#![allow(non_snake_case)]
 
 use tower_json_rpc::error::JsonRpcError;
 use tower_json_rpc::ws_client::{WsClient, WsClientBuilder};
@@ -27,11 +26,11 @@ use tower_json_rpc_derive::rpc;
 #[rpc(client, namespace = "eth")]
 pub trait Eth {
     /// Get the current block number.
-    async fn blockNumber(&self) -> Result<String, JsonRpcError>;
+    async fn block_number(&self) -> Result<String, JsonRpcError>;
 
     /// Subscribe to new block headers.
-    // #[subscription(name = "subscribe" => "subscription", item = NewHead)]
-    async fn subscribe_new_heads(&self) -> Result<(), JsonRpcError>;
+    #[subscription(name = "subscribe" => "subscription", unsubscribe = "unsubscribe", item = NewHead)]
+    async fn subscribe_new_heads(&self, subscription_type: String);
 }
 
 /// A new block header notification.
@@ -72,9 +71,40 @@ async fn main() -> Result<(), JsonRpcError> {
 
     let client = WsClient::new(js_client);
 
-    client.subscribe_new_heads();
+    // Use the subscription client trait for subscriptions
+    use EthSubscriptionClient;
 
-    client.blockNumber().await?;
+    // Subscribe to new block headers
+    println!("Subscribing to new block headers...");
+    let mut subscription = client
+        .subscribe_new_heads("newHeads".to_string())
+        .await
+        .map_err(|e| JsonRpcError::RequestProcessing(e.to_string()))?;
 
+    // Print the first 3 block headers
+    let mut count = 0;
+    while let Some(result) = subscription.next().await {
+        match result {
+            Ok(head) => {
+                println!("New block: number={:?}, hash={:?}", head.number, head.hash);
+                count += 1;
+                if count >= 3 {
+                    break;
+                }
+            }
+            Err(e) => {
+                eprintln!("Error receiving block header: {}", e);
+                break;
+            }
+        }
+    }
+
+    // Clean up subscription
+    subscription
+        .unsubscribe()
+        .await
+        .map_err(|e| JsonRpcError::RequestProcessing(e.to_string()))?;
+
+    println!("Done!");
     Ok(())
 }

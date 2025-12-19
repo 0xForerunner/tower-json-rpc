@@ -88,3 +88,6 @@ impl Service<Request<'static>> for WsClient {
 
 // Re-export jsonrpsee ws_client types for convenience
 pub use jsonrpsee::ws_client::WsClientBuilder;
+
+// Re-export subscription types
+pub use jsonrpsee::core::client::{Subscription, SubscriptionClientT};

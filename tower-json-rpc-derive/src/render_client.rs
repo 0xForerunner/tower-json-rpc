@@ -26,18 +26,12 @@
 
 use super::RpcDescription;
 use crate::attributes::ParamKind;
+use crate::rpc_macro::RpcSubscription;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 
 impl RpcDescription {
     pub(super) fn render_client(&self) -> Result<TokenStream2, syn::Error> {
-        if !self.subscriptions.is_empty() {
-            return Err(syn::Error::new_spanned(
-                &self.trait_def.ident,
-                "Client generation for subscriptions is not supported yet",
-            ));
-        }
-
         let trait_name = &self.trait_def.ident;
         let client_trait_name = quote::format_ident!("{}Client", trait_name);
         let request_enum_name = quote::format_ident!("{}Request", trait_name);
@@ -125,30 +119,110 @@ impl RpcDescription {
 			}
 		});
 
+        // Generate subscription methods if there are any
+        let subscription_methods: Vec<_> = self.subscriptions.iter()
+            .map(|sub| self.render_subscription_method(sub))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Generate the client trait - for regular RPC methods
+        let client_trait = if !self.methods.is_empty() {
+            quote! {
+                pub trait #client_trait_name<Req>
+                where
+                    Req: ::tower_json_rpc::client::ClientRequest + Send + 'static,
+                    Req::Response: ::tower_json_rpc::client::ClientResponse + Send + 'static,
+                    Self: ::tower::Service<Req, Response = <Req as ::tower_json_rpc::client::ClientRequest>::Response> + Clone + Send + 'static,
+                    <Self as ::tower::Service<Req>>::Future: 'static,
+                    <Self as ::tower::Service<Req>>::Error: Into<::tower_json_rpc::error::JsonRpcError> + Send + 'static,
+                {
+                    #(#methods)*
+                }
+
+                impl<T, Req> #client_trait_name<Req> for T
+                where
+                    Req: ::tower_json_rpc::client::ClientRequest + Send + 'static,
+                    Req::Response: ::tower_json_rpc::client::ClientResponse + Send + 'static,
+                    T: ::tower::Service<Req, Response = <Req as ::tower_json_rpc::client::ClientRequest>::Response> + Clone + Send + 'static,
+                    <T as ::tower::Service<Req>>::Future: 'static,
+                    <T as ::tower::Service<Req>>::Error: Into<::tower_json_rpc::error::JsonRpcError> + Send + 'static,
+                {}
+            }
+        } else {
+            TokenStream2::new()
+        };
+
+        // Generate subscription client trait - for subscription methods
+        let subscription_client_trait = if !self.subscriptions.is_empty() {
+            let subscription_client_trait_name = quote::format_ident!("{}SubscriptionClient", trait_name);
+            quote! {
+                pub trait #subscription_client_trait_name: ::jsonrpsee::core::client::SubscriptionClientT {
+                    #(#subscription_methods)*
+                }
+
+                impl<T> #subscription_client_trait_name for T
+                where
+                    T: ::jsonrpsee::core::client::SubscriptionClientT,
+                {}
+            }
+        } else {
+            TokenStream2::new()
+        };
+
         Ok(quote! {
             #request_enum
             #response_enum
             #server_request_impl
+            #client_trait
+            #subscription_client_trait
+        })
+    }
 
-            pub trait #client_trait_name<Req>
-            where
-                Req: ::tower_json_rpc::client::ClientRequest + Send + 'static,
-                Req::Response: ::tower_json_rpc::client::ClientResponse + Send + 'static,
-                Self: ::tower::Service<Req, Response = <Req as ::tower_json_rpc::client::ClientRequest>::Response> + Clone + Send + 'static,
-                <Self as ::tower::Service<Req>>::Future: 'static,
-                <Self as ::tower::Service<Req>>::Error: Into<::tower_json_rpc::error::JsonRpcError> + Send + 'static,
-            {
-                #(#methods)*
+    fn render_subscription_method(&self, sub: &RpcSubscription) -> Result<TokenStream2, syn::Error> {
+        let method_ident = &sub.signature.sig.ident;
+        let inputs = &sub.signature.sig.inputs;
+        let item_ty = &sub.item;
+        let subscribe_method = self.rpc_identifier(&sub.name);
+        let unsubscribe_method = self.rpc_identifier(&sub.unsubscribe);
+
+        let param_idents: Vec<_> = sub.params.iter().map(|param| &param.arg_pat.ident).collect();
+        let params_builder = if sub.params.is_empty() {
+            quote! { ::jsonrpsee::core::params::ArrayParams::new() }
+        } else if sub.param_kind == ParamKind::Map {
+            let param_names = sub.params.iter().map(|p| p.name());
+            let param_idents2 = param_idents.clone();
+            quote! {
+                {
+                    let mut params = ::jsonrpsee::core::params::ObjectParams::new();
+                    #(params.insert(#param_names, #param_idents2).unwrap();)*
+                    params
+                }
             }
+        } else {
+            let param_idents2 = param_idents.clone();
+            quote! {
+                {
+                    let mut params = ::jsonrpsee::core::params::ArrayParams::new();
+                    #(params.insert(#param_idents2).unwrap();)*
+                    params
+                }
+            }
+        };
 
-            impl<T, Req> #client_trait_name<Req> for T
-            where
-                Req: ::tower_json_rpc::client::ClientRequest + Send + 'static,
-                Req::Response: ::tower_json_rpc::client::ClientResponse + Send + 'static,
-                T: ::tower::Service<Req, Response = <Req as ::tower_json_rpc::client::ClientRequest>::Response> + Clone + Send + 'static,
-                <T as ::tower::Service<Req>>::Future: 'static,
-                <T as ::tower::Service<Req>>::Error: Into<::tower_json_rpc::error::JsonRpcError> + Send + 'static,
-            {}
+        Ok(quote! {
+            fn #method_ident(#inputs) -> impl ::core::future::Future<
+                Output = Result<
+                    ::jsonrpsee::core::client::Subscription<#item_ty>,
+                    ::jsonrpsee::core::client::Error
+                >
+            > + Send {
+                let params = #params_builder;
+                ::jsonrpsee::core::client::SubscriptionClientT::subscribe(
+                    self,
+                    #subscribe_method,
+                    params,
+                    #unsubscribe_method,
+                )
+            }
         })
     }
 

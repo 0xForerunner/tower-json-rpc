@@ -24,12 +24,20 @@ futures.workspace = true
 futures-util.workspace = true
 hyper.workspace = true
 jsonrpsee-types.workspace = true
-
+jsonrpsee = { workspace = true, features = ["ws-client"], optional = true }
 
 hyper-util.workspace = true
 hyper-rustls.workspace = true
 http-body-util.workspace = true
 axum.workspace = true
+
+[features]
+default = ["ws"]
+ws = ["dep:jsonrpsee", "dep:tokio"]
+
+[dependencies.tokio]
+workspace = true
+optional = true
 
 [dev-dependencies]
 axum.workspace = true
@@ -41,3 +49,7 @@ hyper-util = { workspace = true, features = ["full"] }
 hyper-rustls = { workspace = true, features = ["ring"] }
 http-body-util.workspace = true
 tower-json-rpc-derive = { path = "../tower-json-rpc-derive" }
+
+[[example]]
+name = "ws_subscription_client"
+required-features = ["ws"]

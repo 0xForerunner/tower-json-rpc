@@ -4,6 +4,9 @@ pub mod error;
 pub mod request;
 pub mod server;
 
+#[cfg(feature = "ws")]
+pub mod ws_client;
+
 pub mod types {
     pub use jsonrpsee_types::*;
 }

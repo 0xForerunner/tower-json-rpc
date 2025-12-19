@@ -17,12 +17,32 @@ pub trait ClientRequest: Sized + Send + 'static {
     ) -> Pin<Box<dyn Future<Output = Result<Self, JsonRpcError>> + Send + 'static>>;
 }
 
+impl<B: Send + Sync + 'static> ClientRequest for hyper::Request<B> {
+    type Response = hyper::Response<B>;
+
+    fn from_json_rpc_request(
+        request: Request<'static>,
+    ) -> Pin<Box<dyn Future<Output = Result<Self, JsonRpcError>> + Send + 'static>> {
+        todo!()
+    }
+}
+
 pub trait ClientResponse: Send + 'static {
     fn to_json_rpc_response(
         self,
     ) -> Pin<
         Box<dyn Future<Output = Result<Response<'static, Value>, JsonRpcError>> + Send + 'static>,
     >;
+}
+
+impl<B: Send + Sync + 'static> ClientResponse for hyper::Response<B> {
+    fn to_json_rpc_response(
+        self,
+    ) -> Pin<
+        Box<dyn Future<Output = Result<Response<'static, Value>, JsonRpcError>> + Send + 'static>,
+    > {
+        todo!()
+    }
 }
 
 /// A layer that maps http requests to JSON-RPC requests.

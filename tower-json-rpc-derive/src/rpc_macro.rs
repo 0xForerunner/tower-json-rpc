@@ -200,6 +200,8 @@ pub struct RpcDescription {
 	/// Assuming that trait to which attribute is applied is named `Foo`, the generated
 	/// server trait will have `FooServer` name.
 	pub(crate) needs_server: bool,
+	/// Switch denoting that client trait must be generated.
+	pub(crate) needs_client: bool,
 	/// Optional prefix for RPC namespace.
 	pub(crate) namespace: Option<String>,
 	/// Optional separator between namespace and method name. Defaults to `_`.
@@ -225,18 +227,18 @@ impl RpcDescription {
 			])?;
 
 		let needs_server = optional(server, Argument::flag)?.is_some();
-		let _needs_client = optional(client, Argument::flag)?.is_some();
+		let needs_client = optional(client, Argument::flag)?.is_some();
 		let namespace = optional(namespace, Argument::string)?;
 		let namespace_separator = optional(namespace_separator, Argument::string)?;
 		let _client_bounds: Option<Punctuated<syn::WherePredicate, Token![,]>> =
 			optional(client_bounds, Argument::group)?;
 		let _server_bounds: Option<Punctuated<syn::WherePredicate, Token![,]>> =
 			optional(server_bounds, Argument::group)?;
-		if !needs_server && !_needs_client {
+		if !needs_server && !needs_client {
 			return Err(syn::Error::new_spanned(&item.ident, "Either 'server' or 'client' attribute must be applied"));
 		}
 
-		if _client_bounds.is_some() && !_needs_client {
+		if _client_bounds.is_some() && !needs_client {
 			return Err(syn::Error::new_spanned(
 				&item.ident,
 				"Attribute 'client' must be specified with 'client_bounds'",
@@ -305,6 +307,7 @@ impl RpcDescription {
 
 		Ok(Self {
 			needs_server,
+			needs_client,
 			namespace,
 			namespace_separator,
 			trait_def: item,
@@ -314,11 +317,12 @@ impl RpcDescription {
 	}
 
 	pub fn render(self) -> Result<TokenStream2, syn::Error> {
+		let trait_def = &self.trait_def;
 		let server_impl = if self.needs_server { self.render_server()? } else { TokenStream2::new() };
-		// Client generation is disabled for now as we're focusing on the server side
-		let client_impl = TokenStream2::new();
+		let client_impl = if self.needs_client { self.render_client()? } else { TokenStream2::new() };
 
 		Ok(quote! {
+			#trait_def
 			#server_impl
 			#client_impl
 		})

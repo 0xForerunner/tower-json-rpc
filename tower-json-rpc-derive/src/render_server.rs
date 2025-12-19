@@ -31,7 +31,6 @@ use std::borrow::Cow;
 
 impl RpcDescription {
 	pub(super) fn render_server(&self) -> Result<TokenStream2, syn::Error> {
-		let trait_def = &self.trait_def;
 		let trait_name = &self.trait_def.ident;
 		let request_enum_name = quote::format_ident!("{}Request", trait_name);
 		let server_layer_name = quote::format_ident!("{}ServerLayer", trait_name);
@@ -43,7 +42,6 @@ impl RpcDescription {
 		let server_layer = self.render_server_layer(&server_layer_name, &server_service_name, &request_enum_name)?;
 		
 		Ok(quote! {
-			#trait_def
 			#request_enum
 			#into_request_impl
 			#try_from_request_impl

@@ -37,3 +37,4 @@ tokio = { workspace = true, features = ["full"] }
 hyper-util = { workspace = true, features = ["full"] }
 hyper-rustls = { workspace = true, features = ["ring"] }
 http-body-util.workspace = true
+tower-json-rpc-derive = { path = "../tower-json-rpc-derive" }

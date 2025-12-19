@@ -1,3 +1,5 @@
+#![allow(async_fn_in_trait)]
+
 use tower_json_rpc_derive::rpc;
 use jsonrpsee_types::ErrorObjectOwned;
 

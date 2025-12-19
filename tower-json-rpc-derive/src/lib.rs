@@ -33,11 +33,8 @@ use proc_macro::TokenStream;
 use rpc_macro::RpcDescription;
 
 mod attributes;
-mod helpers;
-mod render_client;
 mod render_server;
 mod rpc_macro;
-pub(crate) mod visitor;
 
 /// Main RPC macro.
 ///

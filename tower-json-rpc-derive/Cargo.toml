@@ -29,8 +29,6 @@ syn = { workspace = true, features = [
   "clone-impls",
   "proc-macro",
 ] }
-proc-macro-crate = { workspace = true }
-heck = { workspace = true }
 
 [dev-dependencies]
 hyper = { workspace = true }

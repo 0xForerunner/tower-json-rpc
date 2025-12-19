@@ -31,7 +31,6 @@ use std::borrow::Cow;
 use crate::attributes::{
 	Aliases, Argument, AttributeMeta, MissingArgument, NameMapping, ParamKind, optional, parse_param_kind,
 };
-use crate::helpers::extract_doc_comments;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::spanned::Spanned;
@@ -64,35 +63,21 @@ impl RpcFnArg {
 		// remove argument attribute after inspection
 		attrs.retain(|attr| !attr.meta.path().is_ident("argument"));
 
-		Ok(Self { arg_pat, rename_to, ty })
-	}
-
-	/// Return the pattern identifier of the argument.
-	pub fn arg_pat(&self) -> &syn::PatIdent {
-		&self.arg_pat
-	}
+	Ok(Self { arg_pat, rename_to, ty })
+}
 	/// Return the string representation of this argument when (de)seriaizing.
 	pub fn name(&self) -> String {
 		self.rename_to.clone().unwrap_or_else(|| self.arg_pat.ident.to_string())
-	}
-	/// Return the type of the argument.
-	pub fn ty(&self) -> &syn::Type {
-		&self.ty
 	}
 }
 
 #[derive(Debug, Clone)]
 pub struct RpcMethod {
 	pub name: String,
-	pub blocking: bool,
-	pub docs: TokenStream2,
-	pub deprecated: TokenStream2,
 	pub params: Vec<RpcFnArg>,
 	pub param_kind: ParamKind,
-	pub returns: Option<syn::Type>,
 	pub signature: syn::TraitItemFn,
 	pub aliases: Vec<String>,
-	pub with_extensions: bool,
 }
 
 impl RpcMethod {
@@ -104,13 +89,7 @@ impl RpcMethod {
 		let blocking = optional(blocking, Argument::flag)?.is_some();
 		let name = name?.string()?;
 		let param_kind = parse_param_kind(param_kind)?;
-		let with_extensions = optional(with_extensions, Argument::flag)?.is_some();
-
-		let docs = extract_doc_comments(&method.attrs);
-		let deprecated = match find_attr(&method.attrs, "deprecated") {
-			Some(attr) => quote!(#attr),
-			None => quote!(),
-		};
+		let _with_extensions = optional(with_extensions, Argument::flag)?.is_some();
 
 		if blocking && method.sig.asyncness.is_some() {
 			return Err(syn::Error::new(method.sig.span(), "Blocking method must be synchronous"));
@@ -138,25 +117,15 @@ impl RpcMethod {
 			})
 			.collect::<Result<_, _>>()?;
 
-		let returns = match method.sig.output.clone() {
-			syn::ReturnType::Default => None,
-			syn::ReturnType::Type(_, output) => Some(*output),
-		};
-
 		// We've analyzed attributes and don't need them anymore.
 		method.attrs.clear();
 
 		Ok(Self {
 			aliases,
-			blocking,
 			name,
 			params,
 			param_kind,
-			returns,
 			signature: method,
-			docs,
-			deprecated,
-			with_extensions,
 		})
 	}
 }
@@ -164,22 +133,9 @@ impl RpcMethod {
 #[derive(Debug, Clone)]
 pub struct RpcSubscription {
 	pub name: String,
-	/// When subscribing to an RPC, users can override the content of the `method` field
-	/// in the JSON data sent to subscribers.
-	/// Each subscription thus has one method name to set up the subscription,
-	/// one to unsubscribe and, optionally, a third method name used to describe the
-	/// payload (aka "notification") sent back from the server to subscribers.
-	/// If no override is provided, the subscription method name is used.
-	pub notif_name_override: Option<String>,
-	pub docs: TokenStream2,
-	pub unsubscribe: String,
 	pub params: Vec<RpcFnArg>,
 	pub param_kind: ParamKind,
-	pub item: syn::Type,
-	pub signature: syn::TraitItemFn,
 	pub aliases: Vec<String>,
-	pub unsubscribe_aliases: Vec<String>,
-	pub with_extensions: bool,
 }
 
 impl RpcSubscription {
@@ -198,14 +154,13 @@ impl RpcSubscription {
 		let aliases = parse_aliases(aliases)?;
 		let map = name?.value::<NameMapping>()?;
 		let name = map.name;
-		let notif_name_override = map.mapped;
-		let item = item?.value()?;
+		let _notif_name_override = map.mapped;
+		let _item: syn::Type = item?.value()?;
 		let param_kind = parse_param_kind(param_kind)?;
-		let unsubscribe_aliases = parse_aliases(unsubscribe_aliases)?;
-		let with_extensions = optional(with_extensions, Argument::flag)?.is_some();
+		let _unsubscribe_aliases = parse_aliases(unsubscribe_aliases)?;
+		let _with_extensions = optional(with_extensions, Argument::flag)?.is_some();
 
-		let docs = extract_doc_comments(&sub.attrs);
-		let unsubscribe = match parse_subscribe(unsubscribe)? {
+		let _unsubscribe = match parse_subscribe(unsubscribe)? {
 			Some(unsub) => unsub,
 			None => build_unsubscribe_method(&name).unwrap_or_else(||
 				panic!("Could not generate the unsubscribe method with name '{name}'. You need to provide the name manually using the `unsubscribe` attribute in your RPC API definition"),
@@ -232,34 +187,19 @@ impl RpcSubscription {
 
 		Ok(Self {
 			name,
-			notif_name_override,
-			unsubscribe,
-			unsubscribe_aliases,
 			params,
 			param_kind,
-			item,
-			signature: sub,
 			aliases,
-			docs,
-			with_extensions,
 		})
 	}
 }
 
 #[derive(Debug)]
 pub struct RpcDescription {
-	/// Path to the `jsonrpsee` client types part.
-	pub(crate) jsonrpsee_client_path: Option<TokenStream2>,
-	/// Path to the `jsonrpsee` server types part.
-	pub(crate) jsonrpsee_server_path: Option<TokenStream2>,
 	/// Switch denoting that server trait must be generated.
 	/// Assuming that trait to which attribute is applied is named `Foo`, the generated
 	/// server trait will have `FooServer` name.
 	pub(crate) needs_server: bool,
-	/// Switch denoting that client extension trait must be generated.
-	/// Assuming that trait to which attribute is applied is named `Foo`, the generated
-	/// client trait will have `FooClient` name.
-	pub(crate) needs_client: bool,
 	/// Optional prefix for RPC namespace.
 	pub(crate) namespace: Option<String>,
 	/// Optional separator between namespace and method name. Defaults to `_`.
@@ -270,10 +210,6 @@ pub struct RpcDescription {
 	pub(crate) methods: Vec<RpcMethod>,
 	/// List of RPC subscriptions defined in the trait.
 	pub(crate) subscriptions: Vec<RpcSubscription>,
-	/// Optional user defined trait bounds for the client implementation.
-	pub(crate) client_bounds: Option<Punctuated<syn::WherePredicate, Token![,]>>,
-	/// Optional user defined trait bounds for the server implementation.
-	pub(crate) server_bounds: Option<Punctuated<syn::WherePredicate, Token![,]>>,
 }
 
 impl RpcDescription {
@@ -289,32 +225,30 @@ impl RpcDescription {
 			])?;
 
 		let needs_server = optional(server, Argument::flag)?.is_some();
-		let needs_client = optional(client, Argument::flag)?.is_some();
+		let _needs_client = optional(client, Argument::flag)?.is_some();
 		let namespace = optional(namespace, Argument::string)?;
 		let namespace_separator = optional(namespace_separator, Argument::string)?;
-		let client_bounds = optional(client_bounds, Argument::group)?;
-		let server_bounds = optional(server_bounds, Argument::group)?;
-		if !needs_server && !needs_client {
+		let _client_bounds: Option<Punctuated<syn::WherePredicate, Token![,]>> =
+			optional(client_bounds, Argument::group)?;
+		let _server_bounds: Option<Punctuated<syn::WherePredicate, Token![,]>> =
+			optional(server_bounds, Argument::group)?;
+		if !needs_server && !_needs_client {
 			return Err(syn::Error::new_spanned(&item.ident, "Either 'server' or 'client' attribute must be applied"));
 		}
 
-		if client_bounds.is_some() && !needs_client {
+		if _client_bounds.is_some() && !_needs_client {
 			return Err(syn::Error::new_spanned(
 				&item.ident,
 				"Attribute 'client' must be specified with 'client_bounds'",
 			));
 		}
 
-		if server_bounds.is_some() && !needs_server {
+		if _server_bounds.is_some() && !needs_server {
 			return Err(syn::Error::new_spanned(
 				&item.ident,
 				"Attribute 'server' must be specified with 'server_bounds'",
 			));
 		}
-
-		// We don't need jsonrpsee paths anymore since we're using jsonrpsee_types directly
-		let jsonrpsee_client_path = None;
-		let jsonrpsee_server_path = None;
 
 		item.attrs.clear(); // Remove RPC attributes.
 
@@ -369,17 +303,12 @@ impl RpcDescription {
 		strip_rpc_attrs(&mut item);
 
 		Ok(Self {
-			jsonrpsee_client_path,
-			jsonrpsee_server_path,
 			needs_server,
-			needs_client,
 			namespace,
 			namespace_separator,
 			trait_def: item,
 			methods,
 			subscriptions,
-			client_bounds,
-			server_bounds,
 		})
 	}
 
@@ -392,20 +321,6 @@ impl RpcDescription {
 			#server_impl
 			#client_impl
 		})
-	}
-
-	/// Formats the identifier as a path relative to the resolved
-	/// `jsonrpsee` client path.
-	pub(crate) fn jrps_client_item(&self, item: impl quote::ToTokens) -> TokenStream2 {
-		let jsonrpsee = self.jsonrpsee_client_path.as_ref().unwrap();
-		quote! { #jsonrpsee::#item }
-	}
-
-	/// Formats the identifier as a path relative to the resolved
-	/// `jsonrpsee` server path.
-	pub(crate) fn jrps_server_item(&self, item: impl quote::ToTokens) -> TokenStream2 {
-		let jsonrpsee = self.jsonrpsee_server_path.as_ref().unwrap();
-		quote! { #jsonrpsee::#item }
 	}
 
 	/// Based on the namespace and separator, renders the full name of the RPC method/subscription.

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use tower_json_rpc_derive::rpc;
 
 #[test]

@@ -1,3 +1,5 @@
+![tower-json-rpc](assets/tower-json-rpc.png)
+
 # tower-json-rpc
 
 Tower-native JSON-RPC building blocks with a typed, layer-first API. This crate keeps the

@@ -1,3 +1,5 @@
+use http_body_util::{BodyExt, Full};
+use hyper::body::{Bytes, Incoming};
 use jsonrpsee_types::{Request, Response};
 use serde_json::Value;
 use std::{
@@ -17,13 +19,23 @@ pub trait ClientRequest: Sized + Send + 'static {
     ) -> Pin<Box<dyn Future<Output = Result<Self, JsonRpcError>> + Send + 'static>>;
 }
 
-impl<B: Send + Sync + 'static> ClientRequest for hyper::Request<B> {
-    type Response = hyper::Response<B>;
+/// Implementation for hyper HTTP requests with `Full<Bytes>` body.
+/// This is the common case when using hyper_util's legacy Client.
+impl ClientRequest for hyper::Request<Full<Bytes>> {
+    type Response = hyper::Response<Incoming>;
 
     fn from_json_rpc_request(
         request: Request<'static>,
     ) -> Pin<Box<dyn Future<Output = Result<Self, JsonRpcError>> + Send + 'static>> {
-        todo!()
+        Box::pin(async move {
+            let body = serde_json::to_vec(&request)?;
+            let http_request = hyper::Request::builder()
+                .method(hyper::Method::POST)
+                .header(hyper::header::CONTENT_TYPE, "application/json")
+                .body(Full::new(Bytes::from(body)))
+                .map_err(|e| JsonRpcError::RequestProcessing(e.to_string()))?;
+            Ok(http_request)
+        })
     }
 }
 
@@ -35,13 +47,20 @@ pub trait ClientResponse: Send + 'static {
     >;
 }
 
-impl<B: Send + Sync + 'static> ClientResponse for hyper::Response<B> {
+impl ClientResponse for hyper::Response<Incoming> {
     fn to_json_rpc_response(
         self,
     ) -> Pin<
         Box<dyn Future<Output = Result<Response<'static, Value>, JsonRpcError>> + Send + 'static>,
     > {
-        todo!()
+        Box::pin(async move {
+            let body = self.into_body().collect().await.map_err(|e| {
+                JsonRpcError::RequestProcessing(format!("Failed to read response body: {}", e))
+            })?;
+            let bytes = body.to_bytes();
+            let response: Response<'_, Value> = serde_json::from_slice(&bytes)?;
+            Ok(response.into_owned())
+        })
     }
 }
 

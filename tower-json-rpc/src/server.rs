@@ -42,13 +42,13 @@ pub struct JsonRpcServer<S> {
 }
 
 // Helper type to avoid lifetime issues
-type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + 'static>>;
+type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 
 impl<S, Req> Service<Req> for JsonRpcServer<S>
 where
     Req: ServerRequest,
     S: Service<Request<'static>, Response = Response<'static, Value>> + Clone + Send + 'static,
-    S::Future: 'static,
+    S::Future: Send + 'static,
     S::Error: Into<JsonRpcError> + Send + 'static,
 {
     type Response = Req::Response;
@@ -105,7 +105,8 @@ mod tests {
             }));
 
         let params = serde_json::value::to_raw_value(&vec![serde_json::json!(true)]).unwrap();
-        let json_request: Request<'static> = Request::owned("say_hello".to_string(), Some(params), Id::Number(1));
+        let json_request: Request<'static> =
+            Request::owned("say_hello".to_string(), Some(params), Id::Number(1));
 
         let body = serde_json::to_vec(&json_request).unwrap();
         let http_request = http::Request::builder()
@@ -117,7 +118,12 @@ mod tests {
         let http_response = svc.oneshot(http_request).await.unwrap();
         assert_eq!(http_response.status(), 200);
 
-        let response_bytes = http_response.into_body().collect().await.unwrap().to_bytes();
+        let response_bytes = http_response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes();
         let response: Response<'_, Value> = serde_json::from_slice(&response_bytes).unwrap();
         assert!(matches!(response.payload, ResponsePayload::Success(_)));
     }

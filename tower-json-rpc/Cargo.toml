@@ -29,10 +29,13 @@ jsonrpsee-types.workspace = true
 hyper-util.workspace = true
 hyper-rustls.workspace = true
 http-body-util.workspace = true
+axum.workspace = true
 
 [dev-dependencies]
+axum.workspace = true
 hyper = { workspace = true, features = ["server", "http1"] }
 tower = { workspace = true, features = ["util"] }
+tower-http = { workspace = true, features = ["trace"] }
 tokio = { workspace = true, features = ["full"] }
 hyper-util = { workspace = true, features = ["full"] }
 hyper-rustls = { workspace = true, features = ["ring"] }

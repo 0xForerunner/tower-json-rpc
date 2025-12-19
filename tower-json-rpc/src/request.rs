@@ -21,13 +21,18 @@ where
     fn into_json_rpc_request(
         self,
     ) -> Pin<
-        Box<dyn Future<Output = Result<jsonrpsee_types::Request<'static>, JsonRpcError>> + Send + 'static>,
+        Box<
+            dyn Future<Output = Result<jsonrpsee_types::Request<'static>, JsonRpcError>>
+                + Send
+                + 'static,
+        >,
     > {
         Box::pin(async move {
             let bytes = self.collect().await.map_err(Into::into)?.to_bytes();
             let request: Request<'_> = serde_json::from_slice(&bytes)?;
             let params = request.params.map(|params| params.into_owned());
-            let request = Request::owned(request.method.into_owned(), params, request.id.into_owned());
+            let request =
+                Request::owned(request.method.into_owned(), params, request.id.into_owned());
             Ok(request)
         })
     }

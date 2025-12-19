@@ -20,10 +20,18 @@ pub enum JsonRpcError {
     Http(#[from] http::Error),
     #[error(transparent)]
     Hyper(#[from] hyper::Error),
+    #[error(transparent)]
+    Axum(#[from] axum::Error),
 }
 
 impl From<Infallible> for JsonRpcError {
     fn from(err: Infallible) -> Self {
         match err {}
+    }
+}
+
+impl From<JsonRpcError> for Infallible {
+    fn from(_err: JsonRpcError) -> Self {
+        todo!()
     }
 }

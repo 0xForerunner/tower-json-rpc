@@ -42,13 +42,13 @@ pub struct JsonRpcServer<S> {
 }
 
 // Helper type to avoid lifetime issues
-type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
+type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + 'static>>;
 
 impl<S, Req> Service<Req> for JsonRpcServer<S>
 where
     Req: ServerRequest,
     S: Service<Request<'static>, Response = Response<'static, Value>> + Clone + Send + 'static,
-    S::Future: Send + 'static,
+    S::Future: 'static,
     S::Error: Into<JsonRpcError> + Send + 'static,
 {
     type Response = Req::Response;
@@ -63,7 +63,6 @@ where
         use futures_util::future::FutureExt;
 
         let mut service = self.inner.clone();
-
         let fut = request.into_json_rpc_request();
 
         Box::pin(fut.then(move |result| match result {
@@ -83,44 +82,43 @@ where
 
 #[cfg(test)]
 mod tests {
-    use hyper::server::conn::http1;
-    use hyper_util::service::TowerToHyperService;
-    use jsonrpsee_types::{Request, Response};
+    use http::header;
+    use http_body_util::{BodyExt, Full};
+    use hyper::body::Bytes;
+    use jsonrpsee_types::{Id, Request, Response, ResponsePayload};
     use serde_json::Value;
-
-    use std::{convert::Infallible, net::SocketAddr};
-    use tokio::net::TcpListener;
+    use tower::{ServiceBuilder, ServiceExt, service_fn};
 
     use crate::server::JsonRpcLayer;
 
-    async fn handle_json_rpc<'a, T: Clone + Sized + 'a>(
-        _req: Request<'a>,
-    ) -> Result<Response<'a, T>, Infallible> {
-        todo!();
-    }
-
     #[tokio::test]
-    async fn test_build_service() {
-        let addr: SocketAddr = ([127, 0, 0, 1], 3000).into();
-        let app = tower::ServiceBuilder::new()
+    async fn http_to_jsonrpc_roundtrip() {
+        let svc = ServiceBuilder::new()
             .layer(JsonRpcLayer)
-            .service_fn(handle_json_rpc::<Value>);
+            .service(service_fn(|req: Request<'static>| async move {
+                let id = req.id.clone();
+                let method = req.method.to_string();
+                Ok::<_, std::convert::Infallible>(Response::new(
+                    ResponsePayload::success(serde_json::json!({ "method": method })),
+                    id,
+                ))
+            }));
 
-        let hyper_svc = TowerToHyperService::new(app);
+        let params = serde_json::value::to_raw_value(&vec![serde_json::json!(true)]).unwrap();
+        let json_request: Request<'static> = Request::owned("say_hello".to_string(), Some(params), Id::Number(1));
 
-        let listener = TcpListener::bind(addr).await.unwrap();
+        let body = serde_json::to_vec(&json_request).unwrap();
+        let http_request = http::Request::builder()
+            .method("POST")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Full::new(Bytes::from(body)))
+            .unwrap();
 
-        loop {
-            let (stream, _) = listener.accept().await.unwrap();
+        let http_response = svc.oneshot(http_request).await.unwrap();
+        assert_eq!(http_response.status(), 200);
 
-            let io = hyper_util::rt::TokioIo::new(stream);
-            let service_clone = hyper_svc.clone();
-
-            tokio::task::spawn(async move {
-                http1::Builder::new()
-                    .serve_connection(io, service_clone)
-                    .await
-            });
-        }
+        let response_bytes = http_response.into_body().collect().await.unwrap().to_bytes();
+        let response: Response<'_, Value> = serde_json::from_slice(&response_bytes).unwrap();
+        assert!(matches!(response.payload, ResponsePayload::Success(_)));
     }
 }

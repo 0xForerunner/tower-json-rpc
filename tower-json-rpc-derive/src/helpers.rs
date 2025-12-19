@@ -82,18 +82,15 @@ fn find_jsonrpsee_crate(crate_names: &[&str]) -> Result<proc_macro2::TokenStream
 ///
 /// ### Example
 ///
-/// ```
-///  use jsonrpsee::proc_macros::rpc;
-///  use jsonrpsee::core::{RpcResult, SubscriptionResult};
+/// ```ignore
+/// use tower_json_rpc_derive::rpc;
+/// use jsonrpsee_types::ErrorObjectOwned;
 ///
-///  #[rpc(client, server)]
-///  pub trait RpcTrait<A, B, C> {
-///    #[method(name = "call")]
-///    fn call(&self, a: A) -> RpcResult<B>;
-///
-///    #[subscription(name = "subscribe", item = Vec<C>)]
-///    async fn sub(&self) -> SubscriptionResult;
-///  }
+/// #[rpc(server)]
+/// pub trait RpcTrait<A, B, C> {
+///   #[method(name = "call")]
+///   fn call(&self, a: A) -> Result<B, ErrorObjectOwned>;
+/// }
 /// ```
 ///
 /// Because the `item` attribute is not parsed as ordinary rust syntax, the `syn::Type` is traversed to find

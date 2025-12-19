@@ -79,7 +79,7 @@ struct SayServerLayer<H> { /* ... */ }
 Put JSON-RPC in the same Tower stack as the rest of your services.
 
 ```rust
-use jsonrpsee_types::{ErrorObjectOwned, Id, Request, Response};
+use jsonrpsee_types::{ErrorCode, ErrorObjectOwned, Id, Request, Response, ResponsePayload};
 use tower::{ServiceBuilder, service_fn};
 use tower_json_rpc::server::JsonRpcLayer;
 
@@ -88,7 +88,10 @@ let handler = SayImpl;
 // The generated layer needs an inner service; this can be a fallback.
 let json_rpc_service = SayServerLayer::new(handler).layer(service_fn(|req: Request<'static>| async move {
     Ok::<_, std::convert::Infallible>(
-        Response::new_error(req.id, ErrorObjectOwned::method_not_found())
+        Response::new(
+            ResponsePayload::error(ErrorObjectOwned::from(ErrorCode::MethodNotFound)),
+            req.id,
+        )
     )
 }));
 
@@ -108,7 +111,7 @@ let app = ServiceBuilder::new()
 ```rust
 use http_body_util::Full;
 use hyper::body::Bytes;
-use jsonrpsee_types::{ErrorObjectOwned, Request, Response};
+use jsonrpsee_types::{ErrorCode, ErrorObjectOwned, Request, Response, ResponsePayload};
 use tower::{ServiceBuilder, ServiceExt, service_fn};
 use tower_json_rpc::server::JsonRpcLayer;
 
@@ -122,7 +125,10 @@ let app = ServiceBuilder::new()
     .layer(SayServerLayer::new(SayImpl))
     .service(service_fn(|req: Request<'static>| async move {
         Ok::<_, std::convert::Infallible>(
-            Response::new_error(req.id, ErrorObjectOwned::method_not_found())
+            Response::new(
+                ResponsePayload::error(ErrorObjectOwned::from(ErrorCode::MethodNotFound)),
+                req.id,
+            )
         )
     }));
 
@@ -140,9 +146,9 @@ parse and match on variants before the handler runs. This is a clean place to
 add per-method auth, metrics, or feature gates.
 
 ```rust
-use jsonrpsee_types::{ErrorObjectOwned, Request, Response};
+use jsonrpsee_types::{ErrorCode, ErrorObjectOwned, Request, Response, ResponsePayload};
 use std::{future::Future, pin::Pin, task::{Context, Poll}};
-use tower::{Layer, Service};
+use tower::{Layer, Service, ServiceBuilder, service_fn};
 
 #[derive(Clone)]
 struct DenyHelloLayer;
@@ -162,12 +168,12 @@ impl<S> Layer<S> for DenyHelloLayer {
 
 impl<S> Service<Request<'static>> for DenyHello<S>
 where
-    S: Service<Request<'static>, Response = Response<'static, serde_json::Value>> + Clone + Send + 'static,
-    S::Future: Send + 'static,
+    S: Service<Request<'static>, Response = Response<'static, serde_json::Value>> + Clone + 'static,
+    S::Future: 'static,
 {
     type Response = Response<'static, serde_json::Value>;
     type Error = S::Error;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + 'static>>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.inner.poll_ready(cx)
@@ -177,9 +183,13 @@ where
         let mut inner = self.inner.clone();
         Box::pin(async move {
             if let Ok(SayRequest::Hello { .. }) = SayRequest::try_from(req.clone()) {
-                return Ok(Response::new_error(
+                return Ok(Response::new(
+                    ResponsePayload::error(ErrorObjectOwned::owned(
+                        ErrorCode::InvalidRequest.code(),
+                        ErrorCode::InvalidRequest.message(),
+                        Some("say_hello is disabled"),
+                    )),
                     req.id,
-                    ErrorObjectOwned::invalid_request("say_hello is disabled"),
                 ));
             }
 
@@ -191,10 +201,12 @@ where
 let app = ServiceBuilder::new()
     .layer(DenyHelloLayer)
     .layer(SayServerLayer::new(SayImpl))
-    .layer(JsonRpcLayer)
-    .service(tower::service_fn(|req: Request<'static>| async move {
+    .service(service_fn(|req: Request<'static>| async move {
         Ok::<_, std::convert::Infallible>(
-            Response::new_error(req.id, ErrorObjectOwned::method_not_found())
+            Response::new(
+                ResponsePayload::error(ErrorObjectOwned::from(ErrorCode::MethodNotFound)),
+                req.id,
+            )
         )
     }));
 ```
@@ -205,18 +217,25 @@ When you have multiple `#[rpc]` traits, build a service per API and route by
 method. Namespaces keep routing simple and avoid collisions.
 
 ```rust
-use jsonrpsee_types::{ErrorObjectOwned, Request, Response};
-use tower::{Service, ServiceExt};
+use jsonrpsee_types::{ErrorCode, ErrorObjectOwned, Request, Response, ResponsePayload};
+use tower::{Service, ServiceBuilder, ServiceExt};
+use tower_json_rpc::server::JsonRpcLayer;
 
 let say = SayServerLayer::new(SayImpl).layer(tower::service_fn(|req: Request<'static>| async move {
     Ok::<_, std::convert::Infallible>(
-        Response::new_error(req.id, ErrorObjectOwned::method_not_found())
+        Response::new(
+            ResponsePayload::error(ErrorObjectOwned::from(ErrorCode::MethodNotFound)),
+            req.id,
+        )
     )
 }));
 
 let admin = AdminServerLayer::new(AdminImpl).layer(tower::service_fn(|req: Request<'static>| async move {
     Ok::<_, std::convert::Infallible>(
-        Response::new_error(req.id, ErrorObjectOwned::method_not_found())
+        Response::new(
+            ResponsePayload::error(ErrorObjectOwned::from(ErrorCode::MethodNotFound)),
+            req.id,
+        )
     )
 }));
 
@@ -227,7 +246,10 @@ let router = tower::service_fn(move |req: Request<'static>| {
         match req.method.as_ref() {
             m if m.starts_with("say_") => say.ready().await?.call(req).await,
             m if m.starts_with("admin_") => admin.ready().await?.call(req).await,
-            _ => Ok(Response::new_error(req.id, ErrorObjectOwned::method_not_found())),
+            _ => Ok(Response::new(
+                ResponsePayload::error(ErrorObjectOwned::from(ErrorCode::MethodNotFound)),
+                req.id,
+            )),
         }
     }
 });

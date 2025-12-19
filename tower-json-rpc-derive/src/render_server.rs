@@ -27,6 +27,7 @@
 use super::RpcDescription;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
+use std::borrow::Cow;
 
 impl RpcDescription {
 	pub(super) fn render_server(&self) -> Result<TokenStream2, syn::Error> {
@@ -102,29 +103,24 @@ impl RpcDescription {
 				let param_names = method.params.iter().map(|p| p.name());
 				let param_idents2 = param_idents.clone();
 				quote! {
-					Some(jsonrpsee_types::Params::Map({
+					Some(serde_json::value::to_raw_value(&{
 						let mut map = serde_json::Map::new();
 						#(map.insert(#param_names.to_string(), serde_json::to_value(#param_idents2).unwrap());)*
 						map
-					}))
+					}).unwrap())
 				}
 			} else {
 				let param_idents2 = param_idents.clone();
 				quote! {
-					Some(jsonrpsee_types::Params::Array(vec![
+					Some(serde_json::value::to_raw_value(&vec![
 						#(serde_json::to_value(#param_idents2).unwrap()),*
-					]))
+					]).unwrap())
 				}
 			};
 			
 			quote! {
-				Self::#variant_name { #(#param_idents),* } => {
-					jsonrpsee_types::Request {
-						id: jsonrpsee_types::Id::Number(0),
-						method: #method_name.into(),
-						params: #params_value,
-						extensions: Default::default(),
-					}
+				#enum_name::#variant_name { #(#param_idents),* } => {
+					jsonrpsee_types::Request::owned(#method_name.into(), #params_value, jsonrpsee_types::Id::Number(0))
 				}
 			}
 		});
@@ -140,29 +136,24 @@ impl RpcDescription {
 				let param_names = sub.params.iter().map(|p| p.name());
 				let param_idents2 = param_idents.clone();
 				quote! {
-					Some(jsonrpsee_types::Params::Map({
+					Some(serde_json::value::to_raw_value(&{
 						let mut map = serde_json::Map::new();
 						#(map.insert(#param_names.to_string(), serde_json::to_value(#param_idents2).unwrap());)*
 						map
-					}))
+					}).unwrap())
 				}
 			} else {
 				let param_idents2 = param_idents.clone();
 				quote! {
-					Some(jsonrpsee_types::Params::Array(vec![
+					Some(serde_json::value::to_raw_value(&vec![
 						#(serde_json::to_value(#param_idents2).unwrap()),*
-					]))
+					]).unwrap())
 				}
 			};
 			
 			quote! {
-				Self::#variant_name { #(#param_idents),* } => {
-					jsonrpsee_types::Request {
-						id: jsonrpsee_types::Id::Number(0),
-						method: #method_name.into(),
-						params: #params_value,
-						extensions: Default::default(),
-					}
+				#enum_name::#variant_name { #(#param_idents),* } => {
+					jsonrpsee_types::Request::owned(#method_name.into(), #params_value, jsonrpsee_types::Id::Number(0))
 				}
 			}
 		});
@@ -182,7 +173,8 @@ impl RpcDescription {
 	fn render_try_from_request(&self, enum_name: &syn::Ident) -> Result<TokenStream2, syn::Error> {
 		let method_arms = self.methods.iter().map(|method| {
 			let variant_name = to_variant_name(&method.name);
-			let method_name = self.rpc_identifier(&method.name);
+			let method_names = names_with_aliases(self.rpc_identifier(&method.name), &method.aliases);
+			let method_match = method_names.iter().map(|name| quote! { #name });
 			
 			let params_extraction = if method.params.is_empty() {
 				quote! { Ok(Self::#variant_name {}) }
@@ -193,22 +185,27 @@ impl RpcDescription {
 					let ty = &param.ty;
 					quote! {
 						let #name: #ty = map.get(#param_name)
-							.ok_or_else(|| jsonrpsee_types::ErrorObjectOwned::invalid_params(format!("Missing parameter: {}", #param_name)))?
-							.clone()
-							.try_into()
-							.map_err(|_| jsonrpsee_types::ErrorObjectOwned::invalid_params(format!("Invalid parameter type: {}", #param_name)))?;
+							.ok_or_else(|| jsonrpsee_types::ErrorObjectOwned::owned(
+								jsonrpsee_types::ErrorCode::InvalidParams.code(),
+								jsonrpsee_types::ErrorCode::InvalidParams.message(),
+								Some(format!("Missing parameter: {}", #param_name)),
+							))?
+							.clone();
+						let #name: #ty = serde_json::from_value(#name)
+							.map_err(|err| jsonrpsee_types::ErrorObjectOwned::owned(
+								jsonrpsee_types::ErrorCode::InvalidParams.code(),
+								jsonrpsee_types::ErrorCode::InvalidParams.message(),
+								Some(err.to_string()),
+							))?;
 					}
 				});
 				
 				let param_idents = method.params.iter().map(|p| &p.arg_pat.ident);
-				quote! {
-					if let Some(jsonrpsee_types::Params::Map(map)) = request.params {
-						#(#param_extractions)*
-						Ok(Self::#variant_name { #(#param_idents),* })
-					} else {
-						Err(jsonrpsee_types::ErrorObjectOwned::invalid_params("Expected map parameters"))
-					}
-				}
+				quote! {{
+					let map: serde_json::Map<String, serde_json::Value> = request.params().parse()?;
+					#(#param_extractions)*
+					Ok(Self::#variant_name { #(#param_idents),* })
+				}}
 			} else {
 				let param_count = method.params.len();
 				let param_extractions = method.params.iter().enumerate().map(|(i, param)| {
@@ -216,32 +213,38 @@ impl RpcDescription {
 					let ty = &param.ty;
 					quote! {
 						let #name: #ty = serde_json::from_value(arr[#i].clone())
-							.map_err(|_| jsonrpsee_types::ErrorObjectOwned::invalid_params(format!("Invalid parameter at index {}", #i)))?;
+							.map_err(|err| jsonrpsee_types::ErrorObjectOwned::owned(
+								jsonrpsee_types::ErrorCode::InvalidParams.code(),
+								jsonrpsee_types::ErrorCode::InvalidParams.message(),
+								Some(err.to_string()),
+							))?;
 					}
 				});
 				
 				let param_idents = method.params.iter().map(|p| &p.arg_pat.ident);
-				quote! {
-					if let Some(jsonrpsee_types::Params::Array(arr)) = request.params {
-						if arr.len() != #param_count {
-							return Err(jsonrpsee_types::ErrorObjectOwned::invalid_params(format!("Expected {} parameters, got {}", #param_count, arr.len())));
-						}
-						#(#param_extractions)*
-						Ok(Self::#variant_name { #(#param_idents),* })
-					} else {
-						Err(jsonrpsee_types::ErrorObjectOwned::invalid_params("Expected array parameters"))
+				quote! {{
+					let arr: Vec<serde_json::Value> = request.params().parse()?;
+					if arr.len() != #param_count {
+						return Err(jsonrpsee_types::ErrorObjectOwned::owned(
+							jsonrpsee_types::ErrorCode::InvalidParams.code(),
+							jsonrpsee_types::ErrorCode::InvalidParams.message(),
+							Some(format!("Expected {} parameters, got {}", #param_count, arr.len())),
+						));
 					}
-				}
+					#(#param_extractions)*
+					Ok(Self::#variant_name { #(#param_idents),* })
+				}}
 			};
 			
 			quote! {
-				#method_name => #params_extraction
+				#(#method_match)|* => #params_extraction
 			}
 		});
 		
 		let sub_arms = self.subscriptions.iter().map(|sub| {
 			let variant_name = to_variant_name(&sub.name);
-			let method_name = self.rpc_identifier(&sub.name);
+			let sub_names = names_with_aliases(self.rpc_identifier(&sub.name), &sub.aliases);
+			let sub_match = sub_names.iter().map(|name| quote! { #name });
 			
 			let params_extraction = if sub.params.is_empty() {
 				quote! { Ok(Self::#variant_name {}) }
@@ -252,22 +255,27 @@ impl RpcDescription {
 					let ty = &param.ty;
 					quote! {
 						let #name: #ty = map.get(#param_name)
-							.ok_or_else(|| jsonrpsee_types::ErrorObjectOwned::invalid_params(format!("Missing parameter: {}", #param_name)))?
-							.clone()
-							.try_into()
-							.map_err(|_| jsonrpsee_types::ErrorObjectOwned::invalid_params(format!("Invalid parameter type: {}", #param_name)))?;
+							.ok_or_else(|| jsonrpsee_types::ErrorObjectOwned::owned(
+								jsonrpsee_types::ErrorCode::InvalidParams.code(),
+								jsonrpsee_types::ErrorCode::InvalidParams.message(),
+								Some(format!("Missing parameter: {}", #param_name)),
+							))?
+							.clone();
+						let #name: #ty = serde_json::from_value(#name)
+							.map_err(|err| jsonrpsee_types::ErrorObjectOwned::owned(
+								jsonrpsee_types::ErrorCode::InvalidParams.code(),
+								jsonrpsee_types::ErrorCode::InvalidParams.message(),
+								Some(err.to_string()),
+							))?;
 					}
 				});
 				
 				let param_idents = sub.params.iter().map(|p| &p.arg_pat.ident);
-				quote! {
-					if let Some(jsonrpsee_types::Params::Map(map)) = request.params {
-						#(#param_extractions)*
-						Ok(Self::#variant_name { #(#param_idents),* })
-					} else {
-						Err(jsonrpsee_types::ErrorObjectOwned::invalid_params("Expected map parameters"))
-					}
-				}
+				quote! {{
+					let map: serde_json::Map<String, serde_json::Value> = request.params().parse()?;
+					#(#param_extractions)*
+					Ok(Self::#variant_name { #(#param_idents),* })
+				}}
 			} else {
 				let param_count = sub.params.len();
 				let param_extractions = sub.params.iter().enumerate().map(|(i, param)| {
@@ -275,26 +283,31 @@ impl RpcDescription {
 					let ty = &param.ty;
 					quote! {
 						let #name: #ty = serde_json::from_value(arr[#i].clone())
-							.map_err(|_| jsonrpsee_types::ErrorObjectOwned::invalid_params(format!("Invalid parameter at index {}", #i)))?;
+							.map_err(|err| jsonrpsee_types::ErrorObjectOwned::owned(
+								jsonrpsee_types::ErrorCode::InvalidParams.code(),
+								jsonrpsee_types::ErrorCode::InvalidParams.message(),
+								Some(err.to_string()),
+							))?;
 					}
 				});
 				
 				let param_idents = sub.params.iter().map(|p| &p.arg_pat.ident);
-				quote! {
-					if let Some(jsonrpsee_types::Params::Array(arr)) = request.params {
-						if arr.len() != #param_count {
-							return Err(jsonrpsee_types::ErrorObjectOwned::invalid_params(format!("Expected {} parameters, got {}", #param_count, arr.len())));
-						}
-						#(#param_extractions)*
-						Ok(Self::#variant_name { #(#param_idents),* })
-					} else {
-						Err(jsonrpsee_types::ErrorObjectOwned::invalid_params("Expected array parameters"))
+				quote! {{
+					let arr: Vec<serde_json::Value> = request.params().parse()?;
+					if arr.len() != #param_count {
+						return Err(jsonrpsee_types::ErrorObjectOwned::owned(
+							jsonrpsee_types::ErrorCode::InvalidParams.code(),
+							jsonrpsee_types::ErrorCode::InvalidParams.message(),
+							Some(format!("Expected {} parameters, got {}", #param_count, arr.len())),
+						));
 					}
-				}
+					#(#param_extractions)*
+					Ok(Self::#variant_name { #(#param_idents),* })
+				}}
 			};
 			
 			quote! {
-				#method_name => #params_extraction
+				#(#sub_match)|* => #params_extraction
 			}
 		});
 		
@@ -306,7 +319,7 @@ impl RpcDescription {
 					match request.method.as_ref() {
 						#(#method_arms,)*
 						#(#sub_arms,)*
-						_ => Err(jsonrpsee_types::ErrorObjectOwned::method_not_found())
+						_ => Err(jsonrpsee_types::ErrorObjectOwned::from(jsonrpsee_types::ErrorCode::MethodNotFound))
 					}
 				}
 			}
@@ -315,6 +328,14 @@ impl RpcDescription {
 	
 	fn render_server_layer(&self, layer_name: &syn::Ident, service_name: &syn::Ident, request_enum_name: &syn::Ident) -> Result<TokenStream2, syn::Error> {
 		let trait_name = &self.trait_def.ident;
+		let mut all_method_names = Vec::new();
+		for method in &self.methods {
+			all_method_names.extend(names_with_aliases(self.rpc_identifier(&method.name), &method.aliases));
+		}
+		for sub in &self.subscriptions {
+			all_method_names.extend(names_with_aliases(self.rpc_identifier(&sub.name), &sub.aliases));
+		}
+		let all_method_match = all_method_names.iter().map(|name| quote! { #name });
 		
 		let method_match_arms = self.methods.iter().map(|method| {
 			let variant_name = to_variant_name(&method.name);
@@ -332,10 +353,16 @@ impl RpcDescription {
 					match handler.#method_ident(#(#param_idents2),*)#await_token {
 						Ok(result) => {
 							let value = serde_json::to_value(result).unwrap();
-							jsonrpsee_types::Response::new(value, request_id.clone())
+							jsonrpsee_types::Response::new(
+								jsonrpsee_types::ResponsePayload::success(value),
+								request_id.clone(),
+							)
 						}
 						Err(err) => {
-							jsonrpsee_types::Response::new_error(request_id.clone(), err)
+							jsonrpsee_types::Response::new(
+								jsonrpsee_types::ResponsePayload::error(err),
+								request_id.clone(),
+							)
 						}
 					}
 				}
@@ -346,9 +373,15 @@ impl RpcDescription {
 			let variant_name = to_variant_name(&sub.name);
 			quote! {
 				#request_enum_name::#variant_name { .. } => {
-					jsonrpsee_types::Response::new_error(
+					jsonrpsee_types::Response::new(
+						jsonrpsee_types::ResponsePayload::error(
+							jsonrpsee_types::ErrorObjectOwned::owned(
+								jsonrpsee_types::ErrorCode::InvalidRequest.code(),
+								jsonrpsee_types::ErrorCode::InvalidRequest.message(),
+								Some("Subscriptions not yet implemented"),
+							)
+						),
 						request_id.clone(),
-						jsonrpsee_types::ErrorObjectOwned::invalid_request("Subscriptions not yet implemented")
 					)
 				}
 			}
@@ -391,13 +424,13 @@ impl RpcDescription {
 			
 			impl<S, H> tower::Service<jsonrpsee_types::Request<'static>> for #service_name<S, H>
 			where
-				S: tower::Service<jsonrpsee_types::Request<'static>, Response = jsonrpsee_types::Response<'static, serde_json::Value>> + Send,
-				S::Future: Send,
+				S: tower::Service<jsonrpsee_types::Request<'static>, Response = jsonrpsee_types::Response<'static, serde_json::Value>> + Clone + Send + 'static,
+				S::Future: 'static,
 				H: #trait_name + Send + Sync + 'static
 			{
 				type Response = jsonrpsee_types::Response<'static, serde_json::Value>;
 				type Error = S::Error;
-				type Future = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+				type Future = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>>>>;
 				
 				fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
 					self.inner.poll_ready(cx)
@@ -406,20 +439,29 @@ impl RpcDescription {
 				fn call(&mut self, request: jsonrpsee_types::Request<'static>) -> Self::Future {
 					let handler = self.handler.clone();
 					let request_id = request.id.clone();
-					
+					let method = request.method.clone();
+					let mut inner = self.inner.clone();
+
 					Box::pin(async move {
+						if !matches!(method.as_ref(), #(#all_method_match)|*) {
+							return inner.call(request).await;
+						}
+
 						let parsed_request = match #request_enum_name::try_from(request) {
 							Ok(req) => req,
 							Err(err) => {
-								return Ok(jsonrpsee_types::Response::new_error(request_id, err));
+								return Ok(jsonrpsee_types::Response::new(
+									jsonrpsee_types::ResponsePayload::error(err),
+									request_id,
+								));
 							}
 						};
-						
+
 						let response = match parsed_request {
 							#(#method_match_arms)*
 							#(#sub_match_arms)*
 						};
-						
+
 						Ok(response)
 					})
 				}
@@ -454,6 +496,13 @@ fn to_variant_name(method_name: &str) -> syn::Ident {
 			result.push(ch);
 		}
 	}
-	
+
 	syn::Ident::new(&result, proc_macro2::Span::call_site())
+}
+
+fn names_with_aliases(primary: Cow<'_, str>, aliases: &[String]) -> Vec<String> {
+	let mut names = Vec::with_capacity(1 + aliases.len());
+	names.push(primary.to_string());
+	names.extend(aliases.iter().cloned());
+	names
 }

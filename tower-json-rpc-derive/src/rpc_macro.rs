@@ -366,6 +366,8 @@ impl RpcDescription {
 			return Err(syn::Error::new_spanned(&item, "RPC cannot be empty"));
 		}
 
+		strip_rpc_attrs(&mut item);
+
 		Ok(Self {
 			jsonrpsee_client_path,
 			jsonrpsee_server_path,
@@ -439,4 +441,19 @@ fn find_attr<'a>(attrs: &'a [Attribute], ident: &str) -> Option<&'a Attribute> {
 
 fn build_unsubscribe_method(method: &str) -> Option<String> {
 	method.strip_prefix("subscribe").map(|s| format!("unsubscribe{s}"))
+}
+
+fn strip_rpc_attrs(item: &mut syn::ItemTrait) {
+	for entry in item.items.iter_mut() {
+		if let syn::TraitItem::Fn(method) = entry {
+			method
+				.attrs
+				.retain(|attr| !attr.path().is_ident("method") && !attr.path().is_ident("subscription"));
+			for input in method.sig.inputs.iter_mut() {
+				if let syn::FnArg::Typed(arg) = input {
+					arg.attrs.retain(|attr| !attr.path().is_ident("argument"));
+				}
+			}
+		}
+	}
 }

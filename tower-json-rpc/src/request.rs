@@ -1,8 +1,7 @@
-use std::pin::Pin;
+use std::{future::Future, pin::Pin};
 
-use futures::FutureExt as _;
 use http::header;
-use http_body_util::BodyExt;
+use http_body_util::{BodyExt, Full};
 use hyper::body::{Body, Bytes};
 use jsonrpsee_types::Request;
 use serde_json::Value;
@@ -15,54 +14,38 @@ use crate::{
 impl<B> ServerRequest for http::Request<B>
 where
     B: Body<Data = Bytes> + Send + 'static,
-    B::Error: Into<JsonRpcError>,
+    B::Error: Into<JsonRpcError> + Send + 'static,
 {
-    type Response = http::Response<B>;
+    type Response = http::Response<Full<Bytes>>;
 
     fn into_json_rpc_request(
         self,
     ) -> Pin<
-        Box<
-            dyn Future<
-                    Output = Result<jsonrpsee_types::Request<'static>, crate::error::JsonRpcError>,
-                > + Send
-                + 'static,
-        >,
+        Box<dyn Future<Output = Result<jsonrpsee_types::Request<'static>, JsonRpcError>> + Send + 'static>,
     > {
-        // let parts = self.into_parts();
-        async move {
+        Box::pin(async move {
             let bytes = self.collect().await.map_err(Into::into)?.to_bytes();
-
-            // TODO: make this better
-            let cloned = bytes.clone();
-            // let deser: Request<'static> = serde_json::from_slice(&cloned)?;
-            // Ok(deser)
-            todo!()
-        }
-        .boxed()
+            let request: Request<'_> = serde_json::from_slice(&bytes)?;
+            let params = request.params.map(|params| params.into_owned());
+            let request = Request::owned(request.method.into_owned(), params, request.id.into_owned());
+            Ok(request)
+        })
     }
 }
 
-impl<B> ServerResponse for http::Response<B>
-where
-    // B: From<Vec<u8>> + Send + 'static,
-    B: Body<Data = Bytes> + Send + 'static,
-    // B::Error: Into<JsonRpcError>,
-{
+impl ServerResponse for http::Response<Full<Bytes>> {
     fn from_json_rpc_response(
         response: jsonrpsee_types::Response<'static, Value>,
     ) -> Pin<Box<dyn Future<Output = Result<Self, JsonRpcError>> + Send + 'static>> {
-        async move {
+        Box::pin(async move {
             let json = serde_json::to_vec(&response).map_err(JsonRpcError::from)?;
-            // let body: B = json.into();
-            let body: B = todo!();
+            let body = Full::new(Bytes::from(json));
 
             http::Response::builder()
                 .status(200)
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(body)
                 .map_err(Into::<JsonRpcError>::into)
-        }
-        .boxed()
+        })
     }
 }

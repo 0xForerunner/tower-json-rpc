@@ -1,7 +1,3 @@
-use http_body_util::Full;
-use hyper::body::Bytes;
-use hyper_rustls::HttpsConnector;
-use hyper_util::client::legacy::{Client, connect::HttpConnector};
 use jsonrpsee_types::{Request, Response};
 use serde_json::Value;
 use std::{
@@ -29,12 +25,18 @@ pub trait ClientResponse: Send + 'static {
     >;
 }
 
-pub type MyClient = Client<HttpsConnector<HttpConnector>, Full<Bytes>>;
-
 /// A layer that maps http requests to JSON-RPC requests.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct JsonRpcClientLayer<Req> {
     _req: std::marker::PhantomData<Req>,
+}
+
+impl<Req> Default for JsonRpcClientLayer<Req> {
+    fn default() -> Self {
+        Self {
+            _req: std::marker::PhantomData,
+        }
+    }
 }
 
 impl<S, Req> Layer<S> for JsonRpcClientLayer<Req> {
@@ -57,10 +59,10 @@ pub struct JsonRpcClient<S, Req> {
 
 impl<S, Req> Service<Request<'static>> for JsonRpcClient<S, Req>
 where
-    Req: ClientRequest + Clone + Send + 'static,
+    Req: ClientRequest + Send + 'static,
     S: Service<Req, Response = <Req as ClientRequest>::Response> + Clone + Send + 'static,
     S::Future: Send + 'static,
-    S::Error: Into<JsonRpcError>,
+    S::Error: Into<JsonRpcError> + Send + 'static,
 {
     type Response = Response<'static, Value>;
     type Error = JsonRpcError;
@@ -72,50 +74,69 @@ where
     }
 
     fn call(&mut self, request: Request<'static>) -> Self::Future {
-        // See https://github.com/tower-rs/tower/blob/abb375d08cf0ba34c1fe76f66f1aba3dc4341013/tower-service/src/lib.rs#L276
-        // for an explanation of this pattern
-        let mut service = self.clone();
-        service.inner = std::mem::replace(&mut self.inner, service.inner);
+        let mut service = self.inner.clone();
 
         Box::pin(async move {
             let client_request = Req::from_json_rpc_request(request).await?;
-            let response = service
-                .inner
-                .call(client_request)
-                .await
-                .map_err(Into::into)?;
+            let response = service.call(client_request).await.map_err(Into::into)?;
             response.to_json_rpc_response().await
         })
     }
 }
 #[cfg(test)]
 mod tests {
-    use http_body_util::Full;
-    use hyper::body::Bytes;
-    use hyper_util::{client::legacy::Client, rt::TokioExecutor};
+    use jsonrpsee_types::{Id, Request, Response, ResponsePayload};
+    use std::{future::Future, pin::Pin};
+    use tower::{ServiceBuilder, ServiceExt, service_fn};
 
-    use tower::Service;
-    use tower::ServiceExt;
+    use crate::client::{ClientRequest, ClientResponse, JsonRpcClientLayer};
+    use crate::error::JsonRpcError;
 
-    use crate::client::{JsonRpcClientLayer, MyClient};
+    #[derive(Clone)]
+    struct DummyRequest(Request<'static>);
+
+    struct DummyResponse(Response<'static, serde_json::Value>);
+
+    impl ClientRequest for DummyRequest {
+        type Response = DummyResponse;
+
+        fn from_json_rpc_request(
+            request: Request<'static>,
+        ) -> Pin<Box<dyn Future<Output = Result<Self, JsonRpcError>> + Send + 'static>> {
+            Box::pin(async move { Ok(DummyRequest(request)) })
+        }
+    }
+
+    impl ClientResponse for DummyResponse {
+        fn to_json_rpc_response(
+            self,
+        ) -> Pin<
+            Box<
+                dyn Future<Output = Result<Response<'static, serde_json::Value>, JsonRpcError>>
+                    + Send
+                    + 'static,
+            >,
+        > {
+            Box::pin(async move { Ok(self.0) })
+        }
+    }
 
     #[tokio::test]
-    async fn test_build_client() {
-        let connector = hyper_rustls::HttpsConnectorBuilder::new()
-            .with_native_roots()
-            .expect("no native root CA certificates found")
-            .https_or_http()
-            .enable_http1()
-            .build();
+    async fn client_layer_roundtrip() {
+        let service = ServiceBuilder::new()
+            .layer(JsonRpcClientLayer::<DummyRequest>::default())
+            .service(service_fn(|req: DummyRequest| async move {
+                let id = req.0.id.clone();
+                let method = req.0.method.to_string();
+                Ok::<_, std::convert::Infallible>(DummyResponse(Response::new(
+                    ResponsePayload::success(serde_json::json!({ "method": method })),
+                    id,
+                )))
+            }));
 
-        let builder: MyClient = Client::builder(TokioExecutor::new()).build(connector);
+        let request: Request<'static> = Request::owned("ping".to_string(), None, Id::Number(7));
 
-        let mut client = tower::ServiceBuilder::new()
-            .layer(JsonRpcClientLayer::<http::Request<Full<Bytes>>>::default())
-            .service(builder);
-
-        client.ready();
-        let req = todo!();
-        let _ = client.call(req).await;
+        let response = service.oneshot(request).await.unwrap();
+        assert!(matches!(response.payload, ResponsePayload::Success(_)));
     }
 }

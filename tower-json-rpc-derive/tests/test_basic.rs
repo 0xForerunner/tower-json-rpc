@@ -96,7 +96,12 @@ async fn test_service_layer() {
         jsonrpsee_types::Id::Number(1),
     );
 
-    let response = service.ready().await.unwrap().call(request).await.unwrap();
+    let response = ServiceExt::<jsonrpsee_types::Request<'static>>::ready(&mut service)
+        .await
+        .unwrap()
+        .call(request)
+        .await
+        .unwrap();
 
     // Check that we got a successful response
     assert!(matches!(
@@ -129,7 +134,12 @@ async fn test_service_layer_fallback() {
         jsonrpsee_types::Id::Number(2),
     );
 
-    let response = service.ready().await.unwrap().call(request).await.unwrap();
+    let response = ServiceExt::<jsonrpsee_types::Request<'static>>::ready(&mut service)
+        .await
+        .unwrap()
+        .call(request)
+        .await
+        .unwrap();
     let payload = serde_json::to_value(response).unwrap();
     assert_eq!(
         payload.get("result").and_then(|value| value.as_str()),

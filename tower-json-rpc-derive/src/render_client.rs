@@ -43,23 +43,17 @@ impl RpcDescription {
         let request_enum_name = quote::format_ident!("{}Request", trait_name);
         let response_enum_name = quote::format_ident!("{}Response", trait_name);
 
-        // Generate the request enum, response enum, and trait impls
-        // Only if server is not also being generated (to avoid duplicate request enum)
+        // Generate the request enum if server is not also being generated (to avoid duplicate request enum)
         let request_enum = if !self.needs_server {
-            let enum_def = self.render_client_request_enum(&request_enum_name)?;
-            let into_request = self.render_client_into_request(&request_enum_name)?;
-            quote! {
-                #enum_def
-                #into_request
-            }
+            self.render_client_request_enum(&request_enum_name)?
         } else {
             TokenStream2::new()
         };
 
-        // Always generate response enum and RpcRequest/RpcResponse impls for client
+        // Always generate response enum and ServerRequest/ServerResponse impls for client
         let response_enum = self.render_client_response_enum(&response_enum_name)?;
-        let rpc_request_impl =
-            self.render_rpc_request_impl(&request_enum_name, &response_enum_name)?;
+        let server_request_impl =
+            self.render_server_request_impl(&request_enum_name, &response_enum_name)?;
 
         let methods = self.methods.iter().map(|method| {
 			let method_ident = &method.signature.sig.ident;
@@ -134,7 +128,7 @@ impl RpcDescription {
         Ok(quote! {
             #request_enum
             #response_enum
-            #rpc_request_impl
+            #server_request_impl
 
             pub trait #client_trait_name<Req>
             where
@@ -185,9 +179,10 @@ impl RpcDescription {
         })
     }
 
-    fn render_client_into_request(
+    fn render_server_request_impl(
         &self,
-        enum_name: &syn::Ident,
+        request_enum_name: &syn::Ident,
+        response_enum_name: &syn::Ident,
     ) -> Result<TokenStream2, syn::Error> {
         let arms = self.methods.iter().map(|method| {
 			let variant_name = to_variant_name(&method.name);
@@ -216,18 +211,24 @@ impl RpcDescription {
 			};
 
 			quote! {
-				#enum_name::#variant_name { #(#param_idents),* } => {
+				#request_enum_name::#variant_name { #(#param_idents),* } => {
 					::jsonrpsee_types::Request::owned(#method_name.into(), #params_value, ::jsonrpsee_types::Id::Number(0))
 				}
 			}
 		});
 
         Ok(quote! {
-            impl<'a> From<#enum_name> for ::jsonrpsee_types::Request<'a> {
-                fn from(req: #enum_name) -> Self {
-                    match req {
-                        #(#arms)*
-                    }
+            impl ::tower_json_rpc::server::ServerRequest for #request_enum_name {
+                type Response = #response_enum_name;
+
+                fn into_json_rpc_request(
+                    self,
+                ) -> ::core::pin::Pin<Box<dyn ::core::future::Future<Output = Result<::jsonrpsee_types::Request<'static>, ::tower_json_rpc::error::JsonRpcError>> + Send + 'static>> {
+                    Box::pin(async move {
+                        Ok(match self {
+                            #(#arms)*
+                        })
+                    })
                 }
             }
         })
@@ -245,53 +246,43 @@ impl RpcDescription {
             }
         });
 
+        // Generate try-parse arms for from_json_rpc_response
+        // Note: This tries each variant type in order and returns the first successful parse.
+        // This may not correctly identify the variant if multiple methods return the same type.
+        let try_parse_arms = self.methods.iter().map(|method| {
+            let variant_name = to_variant_name(&method.name);
+            let ok_ty = ok_type(&method.signature.sig.output);
+            quote! {
+                if let Ok(result) = ::serde_json::from_value::<#ok_ty>(value.clone()) {
+                    return Ok(#enum_name::#variant_name(result));
+                }
+            }
+        });
+
         Ok(quote! {
             #[derive(Debug, Clone)]
             pub enum #enum_name {
                 #(#variants,)*
             }
 
-            impl ::tower_json_rpc::client::RpcResponse for #enum_name {}
-        })
-    }
-
-    fn render_rpc_request_impl(
-        &self,
-        request_enum_name: &syn::Ident,
-        response_enum_name: &syn::Ident,
-    ) -> Result<TokenStream2, syn::Error> {
-        let parse_arms = self.methods.iter().map(|method| {
-            let variant_name = to_variant_name(&method.name);
-            let ok_ty = ok_type(&method.signature.sig.output);
-            let param_idents: Vec<_> = method
-                .params
-                .iter()
-                .map(|param| &param.arg_pat.ident)
-                .collect();
-
-            // Match pattern for request variant (with or without fields)
-            let pattern = if method.params.is_empty() {
-                quote! { #request_enum_name::#variant_name {} }
-            } else {
-                quote! { #request_enum_name::#variant_name { #(#param_idents),* } }
-            };
-
-            quote! {
-                #pattern => {
-                    let result: #ok_ty = ::serde_json::from_value(value)?;
-                    Ok(#response_enum_name::#variant_name(result))
-                }
-            }
-        });
-
-        Ok(quote! {
-            impl ::tower_json_rpc::client::RpcRequest for #request_enum_name {
-                type Response = #response_enum_name;
-
-                fn parse_response(&self, value: ::serde_json::Value) -> Result<Self::Response, ::tower_json_rpc::error::JsonRpcError> {
-                    match self {
-                        #(#parse_arms)*
-                    }
+            impl ::tower_json_rpc::server::ServerResponse for #enum_name {
+                fn from_json_rpc_response(
+                    response: ::jsonrpsee_types::Response<'static, ::serde_json::Value>,
+                ) -> ::core::pin::Pin<Box<dyn ::core::future::Future<Output = Result<Self, ::tower_json_rpc::error::JsonRpcError>> + Send + 'static>> {
+                    Box::pin(async move {
+                        match response.payload {
+                            ::jsonrpsee_types::ResponsePayload::Success(value) => {
+                                let value = value.into_owned();
+                                #(#try_parse_arms)*
+                                Err(::tower_json_rpc::error::JsonRpcError::RequestProcessing(
+                                    "Failed to deserialize response into any known variant".to_string()
+                                ))
+                            }
+                            ::jsonrpsee_types::ResponsePayload::Error(err) => {
+                                Err(::tower_json_rpc::error::JsonRpcError::RequestProcessing(err.to_string()))
+                            }
+                        }
+                    })
                 }
             }
         })

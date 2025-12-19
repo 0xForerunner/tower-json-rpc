@@ -1,7 +1,7 @@
 use axum::Router;
 use jsonrpsee_types::{ErrorObjectOwned, Request, Response};
 use tower::{ServiceBuilder, service_fn};
-use tower_json_rpc::server::JsonRpcLayer;
+use tower_json_rpc::{error::JsonRpcError, server::JsonRpcLayer};
 use tower_json_rpc_derive::rpc;
 
 #[rpc(server, namespace = "say")]
@@ -33,7 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let id = req.id.clone();
         let method = req.method.to_string();
 
-        Ok::<_, std::convert::Infallible>(Response::new(
+        Ok::<_, JsonRpcError>(Response::new(
             jsonrpsee_types::ResponsePayload::success(serde_json::json!({ "method": method })),
             id,
         ))
@@ -41,11 +41,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2) Wrap it with your layer: now it should accept HTTP requests
     let http_svc = ServiceBuilder::new()
-        .map_err(|e| todo!())
+        .map_err(|_e| todo!())
         .layer(JsonRpcLayer)
+        // .layer(SayServerLayer::new(SayImpl));
         .service(jsonrpc);
 
-    // 3) Mount that service into axum at some endpoint
     let app = Router::new().route_service("/", http_svc);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await?;

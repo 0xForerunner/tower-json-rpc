@@ -81,15 +81,23 @@ pub struct RpcMethod {
 }
 
 impl RpcMethod {
-	pub fn from_item(attr: Attribute, mut method: syn::TraitItemFn) -> syn::Result<Self> {
-		let [aliases, blocking, name, param_kind, with_extensions] =
-			AttributeMeta::parse(attr)?.retain(["aliases", "blocking", "name", "param_kind", "with_extensions"])?;
+	pub fn from_item(attr: Option<Attribute>, mut method: syn::TraitItemFn) -> syn::Result<Self> {
+		let (aliases, blocking, name, param_kind) = if let Some(attr) = attr {
+			let [aliases, blocking, name, param_kind, with_extensions] =
+				AttributeMeta::parse(attr)?.retain(["aliases", "blocking", "name", "param_kind", "with_extensions"])?;
 
-		let aliases = parse_aliases(aliases)?;
-		let blocking = optional(blocking, Argument::flag)?.is_some();
-		let name = name?.string()?;
-		let param_kind = parse_param_kind(param_kind)?;
-		let _with_extensions = optional(with_extensions, Argument::flag)?.is_some();
+			let aliases = parse_aliases(aliases)?;
+			let blocking = optional(blocking, Argument::flag)?.is_some();
+			let name = optional(name, Argument::string)?
+				.unwrap_or_else(|| method.sig.ident.to_string());
+			let param_kind = parse_param_kind(param_kind)?;
+			let _with_extensions = optional(with_extensions, Argument::flag)?.is_some();
+
+			(aliases, blocking, name, param_kind)
+		} else {
+			// No attribute - use defaults
+			(Vec::new(), false, method.sig.ident.to_string(), ParamKind::Array)
+		};
 
 		if blocking && method.sig.asyncness.is_some() {
 			return Err(syn::Error::new(method.sig.span(), "Blocking method must be synchronous"));
@@ -265,33 +273,23 @@ impl RpcDescription {
 					return Err(syn::Error::new_spanned(&method.sig, "First argument of the trait must be '&self'"));
 				}
 
-				let mut is_method = false;
-				let mut is_sub = false;
-				if let Some(attr) = find_attr(&method.attrs, "method") {
-					is_method = true;
+				let method_attr = find_attr(&method.attrs, "method");
+				let sub_attr = find_attr(&method.attrs, "subscription");
 
-					let method_data = RpcMethod::from_item(attr.clone(), method.clone())?;
-
-					methods.push(method_data);
-				}
-				if let Some(attr) = find_attr(&method.attrs, "subscription") {
-					is_sub = true;
-					if is_method {
-						return Err(syn::Error::new_spanned(
-							method,
-							"Element cannot be both subscription and method at the same time",
-						));
-					}
-
-					let sub_data = RpcSubscription::from_item(attr.clone(), method.clone())?;
-					subscriptions.push(sub_data);
-				}
-
-				if !is_method && !is_sub {
+				if method_attr.is_some() && sub_attr.is_some() {
 					return Err(syn::Error::new_spanned(
 						method,
-						"Methods must have either 'method' or 'subscription' attribute",
+						"Element cannot be both subscription and method at the same time",
 					));
+				}
+
+				if let Some(attr) = sub_attr {
+					let sub_data = RpcSubscription::from_item(attr.clone(), method.clone())?;
+					subscriptions.push(sub_data);
+				} else {
+					// Treat as a method (with or without #[method] attribute)
+					let method_data = RpcMethod::from_item(method_attr.cloned(), method.clone())?;
+					methods.push(method_data);
 				}
 			} else {
 				return Err(syn::Error::new_spanned(entry, "Only methods allowed in RPC traits"));

@@ -10,7 +10,6 @@ use tower_json_rpc_derive::rpc;
 
 #[rpc(client, namespace = "say")]
 pub trait Say {
-    #[method(name = "hello")]
     async fn hello(&self, name: String) -> Result<String, JsonRpcError>;
 }
 
